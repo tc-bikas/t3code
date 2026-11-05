@@ -1,6 +1,7 @@
 # Product usage data
 
-The T3 Code server sends product usage events to T3 Code's own endpoint at `ingest.t3.codes`,
+This build sends no product usage events or relay traces unless you opt in with
+`T3CODE_TELEMETRY_ENABLED=true` in the server's environment. When enabled, the T3 Code server sends product usage events to T3 Code's own endpoint at `ingest.t3.codes`,
 associated with a hashed account or installation identifier. To count how many installations one person
 uses, the server also sends hashed account identifiers: your T3 Connect account, your OpenAI and
 Claude accounts when you are signed in, and a random identifier for each device that connects. The endpoint keeps a copy of each
@@ -14,8 +15,8 @@ raw provider events, or child-agent output.
 
 T3 Code also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.
 
-To disable product events and relay tracing, set `T3CODE_TELEMETRY_ENABLED=false` in the server's
-environment before starting it. Relay tracing also stops when `T3CODE_OTEL_SDK_DISABLED` or
+To keep product events and relay tracing off, leave `T3CODE_TELEMETRY_ENABLED` unset or set it to `false`
+in the server's environment before starting it. Relay tracing also stops when `T3CODE_OTEL_SDK_DISABLED` or
 `OTEL_SDK_DISABLED` turns OpenTelemetry export off. The web app in a browser, including one the
 `t3` CLI opens, does not read these variables.
 
