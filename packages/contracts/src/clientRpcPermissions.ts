@@ -53,6 +53,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.vcsCreateRef]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsSwitchRef]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsInit]: AuthSourceControlWriteScope,
+  // Connecting stores a Trellis credential on this environment, as signing in to GitHub does.
+  [WS_METHODS.trellisStartConnect]: AuthSettingsWriteScope,
+  [WS_METHODS.trellisDisconnect]: AuthSettingsWriteScope,
 
   // Starts an agent session on this environment that can read its logs and database.
   [WS_METHODS.serverPrepareTriage]: AuthOrchestrationOperateScope,

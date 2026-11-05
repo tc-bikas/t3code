@@ -405,6 +405,14 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import {
+  TrellisError,
+  TrellisSearchIssuesInput,
+  TrellisSearchIssuesResult,
+  TrellisStartConnectInput,
+  TrellisStartConnectResult,
+  TrellisStatus,
+} from "./trellis.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -552,6 +560,11 @@ export const WS_METHODS = {
 
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
+
+  trellisStatus: "trellis.status",
+  trellisStartConnect: "trellis.startConnect",
+  trellisSearchIssues: "trellis.searchIssues",
+  trellisDisconnect: "trellis.disconnect",
 
   pullRequestsList: "pullRequests.list",
   pullRequestsListStats: "pullRequests.listStats",
@@ -989,6 +1002,32 @@ const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient
   success: RelayClientInstallProgressEventSchema,
   error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
   stream: true,
+});
+
+const TrellisRpcError = Schema.Union([TrellisError, EnvironmentAuthorizationError]);
+
+const WsTrellisStatusRpc = Rpc.make(WS_METHODS.trellisStatus, {
+  payload: Schema.Struct({}),
+  success: TrellisStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsTrellisStartConnectRpc = Rpc.make(WS_METHODS.trellisStartConnect, {
+  payload: TrellisStartConnectInput,
+  success: TrellisStartConnectResult,
+  error: TrellisRpcError,
+});
+
+const WsTrellisSearchIssuesRpc = Rpc.make(WS_METHODS.trellisSearchIssues, {
+  payload: TrellisSearchIssuesInput,
+  success: TrellisSearchIssuesResult,
+  error: TrellisRpcError,
+});
+
+const WsTrellisDisconnectRpc = Rpc.make(WS_METHODS.trellisDisconnect, {
+  payload: Schema.Struct({}),
+  success: Schema.Void,
+  error: TrellisRpcError,
 });
 
 const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
@@ -2074,6 +2113,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
+  WsTrellisStatusRpc,
+  WsTrellisStartConnectRpc,
+  WsTrellisSearchIssuesRpc,
+  WsTrellisDisconnectRpc,
   WsPullRequestsListRpc,
   WsPullRequestsListStatsRpc,
   WsPullRequestsFilterOptionsRpc,

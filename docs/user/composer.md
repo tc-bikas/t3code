@@ -348,6 +348,29 @@ them back.
 On mobile, tap a chip to inspect its content. File references open the current file; attached
 files show the copy that was attached to the message.
 
+## Link a Trellis issue
+
+On web and desktop, open the **+** menu beside Send, choose **Link issue**, and search your
+Trellis issues. Picking one adds its code, title, and link to your message at the cursor.
+
+Connect Trellis once per T3 Code server:
+
+1. Set `T3CODE_TRELLIS_CLIENT_ID`, `T3CODE_TRELLIS_CLIENT_SECRET`, and `T3CODE_TRELLIS_WORKSPACE`
+   (your workspace handle, as it appears in your Trellis URL) in the server's environment, then
+   restart the server. `T3CODE_TRELLIS_BASE_URL` defaults to `https://beta.trellisapp.co.uk`;
+   set it to `https://trellisapp.co.uk` for production.
+2. Choose **Connect Trellis** in the dialog. A Trellis admin signs in and approves read-only
+   access to workspace details, projects, and issues. Approving installs the application in
+   your Trellis workspace; there is no separate install step.
+3. Return to T3 Code. The dialog rechecks when the window regains focus, or choose **Check again**.
+
+Connecting only works when T3 Code is opened on the same computer as its server, using
+`localhost` or `127.0.0.1`. It does not work from app.t3.codes or from another device.
+
+Issues are read through the Trellis application's identity, not as you personally, so everyone
+using this server sees what the application was allowed to see. Choose **Disconnect Trellis** in
+the same dialog to revoke the connection and remove it from the server.
+
 ## Attached files
 
 Select a file chip in your draft or a sent message to preview it. Code and JSON use syntax

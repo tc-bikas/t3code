@@ -51,6 +51,15 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("keeps connecting and disconnecting Trellis, which change a stored credential, behind settings write", () => {
+    for (const method of [WS_METHODS.trellisStartConnect, WS_METHODS.trellisDisconnect]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthSettingsWriteScope);
+    }
+    for (const method of [WS_METHODS.trellisStatus, WS_METHODS.trellisSearchIssues]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+  });
+
   it("separates passive terminal observation from operations that can change a shell", () => {
     for (const method of [WS_METHODS.terminalObserve, WS_METHODS.subscribeTerminalMetadata]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthTerminalReadScope);

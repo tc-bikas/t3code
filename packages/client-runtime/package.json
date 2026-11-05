@@ -307,6 +307,10 @@
       "types": "./src/state/sourceControl.ts",
       "default": "./src/state/sourceControl.ts"
     },
+    "./state/trellis": {
+      "types": "./src/state/trellis.ts",
+      "default": "./src/state/trellis.ts"
+    },
     "./state/terminal": {
       "types": "./src/state/terminal.ts",
       "default": "./src/state/terminal.ts"

@@ -1,5 +1,6 @@
 import { ComposerLinkIssueMenu } from "./ComposerLinkIssueMenu";
 import type {
+  EnvironmentId,
   ModelSelection,
   ProviderInstanceId,
   ProviderInteractionMode,
@@ -247,6 +248,8 @@ export function ComposerPermissionsSection(props: {
 }
 
 export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
+  environmentId: EnvironmentId;
+  onInsertText: (text: string) => boolean;
   compact: boolean;
   canOperateThread: boolean;
   activeContextWindow: ContextWindowSnapshot | null;
@@ -299,7 +302,13 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
       ) : props.reserveContextWindowMeter ? (
         <ContextWindowMeterPlaceholder />
       ) : null}
-      {props.pendingAction ? null : <ComposerLinkIssueMenu disabled={!props.canOperateThread} />}
+      {props.pendingAction ? null : (
+        <ComposerLinkIssueMenu
+          disabled={!props.canOperateThread}
+          environmentId={props.environmentId}
+          onInsertText={props.onInsertText}
+        />
+      )}
       <ComposerPrimaryActions
         compact={props.compact}
         canOperateThread={props.canOperateThread}

@@ -2443,6 +2443,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   };
   const insertComposerTextStable = useStableCallback(insertComposerText);
+  const insertIssueReference = useStableCallback((text: string) =>
+    insertComposerText(text, "cursor", { ensureLeadingBoundary: true }),
+  );
 
   const insertAttachmentReferences = (
     references: ReadonlyArray<ComposerContextReference>,
@@ -3499,6 +3502,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     {composerControls}
                   </div>
                   <ComposerFooterPrimaryActions
+                    environmentId={environmentId}
+                    onInsertText={insertIssueReference}
                     compact={isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
                     activeContextWindow={
