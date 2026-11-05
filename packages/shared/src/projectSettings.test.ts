@@ -160,34 +160,34 @@ describe("resolveProjectSettings", () => {
 
 describe("resolveProjectSettings with a t3.json", () => {
   it("walks project override, environment value, file, then built-in for file-backed keys", () => {
-    const file = { defaultThreadEnvMode: "worktree" as const };
+    const file = { defaultThreadEnvMode: "local" as const };
     const fromOverride = resolveProjectSettings(
       {
         ...DEFAULT_SERVER_SETTINGS,
-        projectSettingsOverrides: { [projectId]: { defaultThreadEnvMode: "local" } },
+        projectSettingsOverrides: { [projectId]: { defaultThreadEnvMode: "worktree" } },
       },
       projectId,
       null,
       file,
     );
-    expect(fromOverride.settings.defaultThreadEnvMode).toBe("local");
+    expect(fromOverride.settings.defaultThreadEnvMode).toBe("worktree");
     expect(fromOverride.sources.defaultThreadEnvMode).toBe("project");
 
     const fromEnvironment = resolveProjectSettings(
-      { ...DEFAULT_SERVER_SETTINGS, defaultThreadEnvMode: "local" },
+      { ...DEFAULT_SERVER_SETTINGS, defaultThreadEnvMode: "worktree" },
       projectId,
       null,
       file,
     );
-    expect(fromEnvironment.settings.defaultThreadEnvMode).toBe("local");
+    expect(fromEnvironment.settings.defaultThreadEnvMode).toBe("worktree");
     expect(fromEnvironment.sources.defaultThreadEnvMode).toBe("environment");
 
     const fromFile = resolveProjectSettings(DEFAULT_SERVER_SETTINGS, projectId, null, file);
-    expect(fromFile.settings.defaultThreadEnvMode).toBe("worktree");
+    expect(fromFile.settings.defaultThreadEnvMode).toBe("local");
     expect(fromFile.sources.defaultThreadEnvMode).toBe("t3.json");
 
     const builtIn = resolveProjectSettings(DEFAULT_SERVER_SETTINGS, projectId, null, null);
-    expect(builtIn.settings.defaultThreadEnvMode).toBe("local");
+    expect(builtIn.settings.defaultThreadEnvMode).toBe("worktree");
     expect(builtIn.sources.defaultThreadEnvMode).toBe("environment");
     const nullOverride = resolveProjectSettings(
       {
@@ -198,7 +198,7 @@ describe("resolveProjectSettings with a t3.json", () => {
       null,
       file,
     );
-    expect(nullOverride.settings.defaultThreadEnvMode).toBe("worktree");
+    expect(nullOverride.settings.defaultThreadEnvMode).toBe("local");
     expect(nullOverride.sources.defaultThreadEnvMode).toBe("t3.json");
     expect(
       resolveProjectSettings(DEFAULT_SERVER_SETTINGS, projectId, null, {}).sources
