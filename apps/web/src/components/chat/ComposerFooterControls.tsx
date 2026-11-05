@@ -1,3 +1,4 @@
+import { ComposerLinkIssueMenu } from "./ComposerLinkIssueMenu";
 import type {
   ModelSelection,
   ProviderInstanceId,
@@ -298,6 +299,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
       ) : props.reserveContextWindowMeter ? (
         <ContextWindowMeterPlaceholder />
       ) : null}
+      {props.pendingAction ? null : <ComposerLinkIssueMenu disabled={!props.canOperateThread} />}
       <ComposerPrimaryActions
         compact={props.compact}
         canOperateThread={props.canOperateThread}

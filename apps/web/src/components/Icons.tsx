@@ -514,3 +514,25 @@ export const OnePasswordIcon: Icon = (props) => (
     />
   </svg>
 );
+
+export const TrellisIcon: Icon = (props) => {
+  const gradientId = `${useId().replaceAll(":", "")}-trellis`;
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...props}>
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+          <stop stopColor="#C9B8FF" />
+          <stop offset="1" stopColor="#6A44C2" />
+        </linearGradient>
+      </defs>
+      <rect width="24" height="24" rx="6" fill={`url(#${gradientId})`} />
+      <path
+        d="M5.2 5.2Q12 10.3 18.8 5.2Q13.7 12 18.8 18.8Q12 13.7 5.2 18.8Q10.3 12 5.2 5.2Z"
+        fill="#FFFFFF"
+        stroke="#FFFFFF"
+        strokeWidth="0.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+};
