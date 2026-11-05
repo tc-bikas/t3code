@@ -122,6 +122,10 @@ T3 Code remembers your provider, model, and model options for new threads. A
 project's configured model takes precedence; resetting that project setting
 returns to the remembered selection.
 
+To pin the default, pick a model and effort in the composer's model picker and choose
+**Set as default**. It saves to the project's model if that project sets one, and to the
+environment default otherwise. Change or reset it in Settings → Threads.
+
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
 ## Quote an assistant response

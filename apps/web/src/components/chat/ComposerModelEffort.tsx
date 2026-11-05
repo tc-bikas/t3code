@@ -643,10 +643,25 @@ export function ComposerPickerFooter(props: {
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  /** Saves the picked model and effort as the default for new threads. */
+  defaultModel?: { isDefault: boolean; disabled: boolean; onSet: () => void } | null;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-border/70 bg-muted/40 px-3 py-2">
       {props.traits ? <SpeedControl traits={props.traits} /> : null}
+      {props.defaultModel ? (
+        <button
+          type="button"
+          disabled={props.defaultModel.isDefault || props.defaultModel.disabled}
+          onClick={props.defaultModel.onSet}
+          className="flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-muted-foreground text-xs outline-none hover:bg-foreground/[0.09] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:cursor-default disabled:opacity-64 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+        >
+          {props.defaultModel.isDefault ? (
+            <CheckIcon aria-hidden="true" className="size-3.5" />
+          ) : null}
+          {props.defaultModel.isDefault ? "Default" : "Set as default"}
+        </button>
+      ) : null}
       <PermissionsMenu
         runtimeMode={props.runtimeMode}
         options={props.runtimeModeOptions}

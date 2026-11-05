@@ -29,6 +29,7 @@ import {
 } from "./ComposerModelEffort";
 import type { useComposerProviderModel } from "./useComposerProviderModel";
 import { resolveComposerControlsOwnership } from "./composerControlsOwnership";
+import { useSetDefaultModel } from "./useSetDefaultModel";
 
 /**
  * The composer footer controls: the model picker (which also holds effort, speed and
@@ -40,6 +41,7 @@ const MODEL_TRIGGER_STATES = "data-popup-open:bg-accent data-popup-open:text-for
 
 export function ComposerControlsBar(props: {
   environmentId: EnvironmentId;
+  activeProjectId: ChatComposerProps["activeProjectId"];
   routeKind: ChatComposerProps["routeKind"];
   routeThreadRef: ChatComposerProps["routeThreadRef"];
   draftId: ChatComposerProps["draftId"];
@@ -137,6 +139,11 @@ export function ComposerControlsBar(props: {
     modelPickerIconClassName,
     getModelDisabledReason,
   } = props;
+  const setDefaultModel = useSetDefaultModel({
+    environmentId,
+    projectId: props.activeProjectId,
+    selection: selectedModelSelection,
+  });
   const accessMatchesDefault = compatibleRuntimeMode === defaultRuntimeMode;
   const {
     accessDisplay,
@@ -234,6 +241,15 @@ export function ComposerControlsBar(props: {
           runtimeMode={compatibleRuntimeMode}
           runtimeModeOptions={compatibleRuntimeModeOptions}
           onRuntimeModeChange={handleRuntimeModeChange}
+          defaultModel={
+            setDefaultModel && !(multipleModelSelections && multipleModelSelections.length > 1)
+              ? {
+                  isDefault: setDefaultModel.isDefault,
+                  disabled: setDefaultModel.disabled,
+                  onSet: () => void setDefaultModel.setDefault(),
+                }
+              : null
+          }
         />
       }
       terminalOpen={terminalOpen}
