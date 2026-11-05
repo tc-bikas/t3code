@@ -126,6 +126,7 @@ function PullRequestRowImpl({
           isDraft={entry.isDraft}
           mergeability={entry.mergeability}
           baseBranch={entry.baseBranch}
+          awaitingReview={entry.viewerReviewRequested && entry.state === "open"}
           className="mt-0.75 self-start"
         />
         <PullRequestRowLines
@@ -159,8 +160,11 @@ function PullRequestRowImpl({
                   }}
                 />
               )}
-              {entry.reviewDecision === undefined ? null : (
-                <PullRequestReviewDecisionGlyph decision={entry.reviewDecision} />
+              {entry.reviewDecision === undefined && !entry.viewerReviewRequested ? null : (
+                <PullRequestReviewDecisionGlyph
+                  decision={entry.reviewDecision ?? "review-required"}
+                  awaitingViewer={entry.viewerReviewRequested && entry.state === "open"}
+                />
               )}
             </>
           }

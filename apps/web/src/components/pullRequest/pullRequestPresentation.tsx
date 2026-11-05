@@ -86,10 +86,15 @@ function reviewDecisionPresentation(decision: PullRequestReviewDecision) {
 
 export function PullRequestReviewDecisionGlyph({
   decision,
+  awaitingViewer = false,
 }: {
   decision: PullRequestReviewDecision;
+  /** The viewer is a requested reviewer, which outranks what others decided. */
+  awaitingViewer?: boolean;
 }) {
-  const presentation = reviewDecisionPresentation(decision);
+  const presentation = awaitingViewer
+    ? { Icon: UserRoundIcon, label: "Awaiting your review", toneClassName: "text-warning" }
+    : reviewDecisionPresentation(decision);
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex shrink-0" />}>

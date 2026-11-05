@@ -28,6 +28,7 @@ export function PullRequestRowGlyph({
   mergeability,
   baseBranch,
   below,
+  awaitingReview = false,
   className,
 }: {
   state: PullRequestState;
@@ -35,12 +36,18 @@ export function PullRequestRowGlyph({
   mergeability?: PullRequestMergeability | undefined;
   baseBranch?: string | undefined;
   below?: ReactNode;
+  /** An open pull request waiting on the viewer's review. */
+  awaitingReview?: boolean;
   className?: string;
 }) {
   return (
     <span className={cn("flex w-4 shrink-0 flex-col items-center gap-0.5", className)}>
       <span className="relative inline-flex">
-        <PullRequestStateGlyph state={state} isDraft={isDraft} />
+        <PullRequestStateGlyph
+          state={state}
+          isDraft={isDraft}
+          {...(awaitingReview ? { className: "text-warning" } : {})}
+        />
         {/* Offset the wrapper to keep the badge-sized tooltip trigger anchored. */}
         <span className="absolute -right-1 -bottom-1 inline-flex">
           <PullRequestConflictGlyph

@@ -77,7 +77,7 @@ export function PullRequestComposer({
       }}
     >
       <PopoverTrigger
-        render={<Button size="icon" variant="glass" />}
+        render={<Button size="icon" variant="outline" />}
         aria-label={
           pendingComments.length > 0
             ? `Review ${term}, ${pendingComments.length} ${pendingComments.length === 1 ? "comment" : "comments"} pending`
