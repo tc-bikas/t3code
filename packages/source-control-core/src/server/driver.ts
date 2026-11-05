@@ -1,4 +1,5 @@
 import type {
+  PullRequestReviewRequestNotice,
   SourceControlAppAccess,
   SourceControlProviderKind,
   SourceControlSignInError,
@@ -46,6 +47,18 @@ export interface SourceControlSignIn {
   ) => Effect.Effect<SourceControlAppAccess["status"]>;
 }
 
+/** One conditional read of the forge's inbox of review requests for the server's account. */
+export type SourceControlReviewRequestPoll =
+  | { readonly _tag: "Unchanged"; readonly pollAfterMs: number }
+  | {
+      readonly _tag: "Changed";
+      readonly etag: string | undefined;
+      readonly pollAfterMs: number;
+      readonly notices: ReadonlyArray<PullRequestReviewRequestNotice>;
+    }
+  /** Rate limited, signed out, offline: ask again after `retryAfterMs`, quietly. */
+  | { readonly _tag: "Unavailable"; readonly retryAfterMs: number };
+
 export interface SourceControlDriverInstance {
   readonly sourceControl: SourceControlProvider.SourceControlProvider["Service"];
   readonly discovery: SourceControlProviderDiscoverySpec;
@@ -67,6 +80,14 @@ export interface SourceControlDriverInstance {
   readonly isRepositoryStarred?: (host: string, repository: string) => Effect.Effect<boolean>;
   /** Stars `repository` as the server's account on `host`; false when the forge refused. */
   readonly starRepository?: (host: string, repository: string) => Effect.Effect<boolean>;
+  /**
+   * Reads new review requests from the forge's notification inbox, with `etag` from the last
+   * `Changed` answer. Never fails; absent where the forge has no such inbox.
+   */
+  readonly pollReviewRequests?: (input: {
+    readonly host: string;
+    readonly etag?: string | undefined;
+  }) => Effect.Effect<SourceControlReviewRequestPoll>;
 }
 
 /** What the server gives every driver. A driver builds anything else it needs itself. */

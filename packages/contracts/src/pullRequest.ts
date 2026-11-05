@@ -403,6 +403,19 @@ export const PullRequestRef = Schema.Struct({
 });
 export type PullRequestRef = typeof PullRequestRef.Type;
 
+/** One new request for the signed-in account's review. Streams carry only notices after subscribing. */
+export const PullRequestReviewRequestNotice = Schema.Struct({
+  /** Stable per request: the same request is never delivered with two ids. */
+  id: TrimmedNonEmptyString,
+  host: TrimmedNonEmptyString,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  title: Schema.String,
+  url: TrimmedNonEmptyString,
+  requestedAt: IsoDateTime,
+});
+export type PullRequestReviewRequestNotice = typeof PullRequestReviewRequestNotice.Type;
+
 export const PullRequestRoutingIdentityInput = Schema.Struct({
   host: TrimmedNonEmptyString,
 });

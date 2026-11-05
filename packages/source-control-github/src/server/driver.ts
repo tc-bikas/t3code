@@ -15,6 +15,7 @@ import * as GitHubMediaFetch from "./gitHubMediaFetch.ts";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import * as GitHubPullRequestProvider from "./GitHubPullRequestProvider.ts";
 import * as GitHubRest from "./GitHubRest.ts";
+import * as GitHubReviewRequests from "./GitHubReviewRequests.ts";
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
 
 // `GitHubRest.layerWithDependencies` carries the quota reserve every GitHub reader shares, so it
@@ -102,6 +103,7 @@ const makeInstance = Effect.all({
   signIn: makeSignIn,
   isRepositoryStarred: makeIsRepositoryStarred,
   starRepository: makeStarRepository,
+  pollReviewRequests: GitHubReviewRequests.makePollReviewRequests,
 });
 
 export const driver = defineSourceControlDriver({

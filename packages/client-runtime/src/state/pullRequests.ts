@@ -368,6 +368,10 @@ export function createPullRequestEnvironmentAtoms<R, E>(
 
   return {
     refreshes,
+    reviewRequests: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:pull-requests:review-requests",
+      tag: WS_METHODS.pullRequestsSubscribeReviewRequests,
+    }),
     linkedThreads: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:linked-threads",
       persistence: persistQuery(PullRequestLinkedThreadsResult),

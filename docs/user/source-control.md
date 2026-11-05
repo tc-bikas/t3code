@@ -197,6 +197,12 @@ co-authors stay credited. The setting is off by default and projects can overrid
 applies to auto-merge, but not merge queues or native stack merges. Original commits keep their
 messages, so merge and rebase can still retain agent credits in those commits.
 
+On web and desktop, T3 Code checks GitHub about once a minute for new requests for your review
+and notifies you, using the settings in **Settings → Notifications**. It signs in with your
+existing GitHub credential, so it needs no GitHub app or public address, and it covers
+github.com only. Set notifications to **Off** to silence it. Requests that arrived while T3 Code
+was not running are not announced.
+
 On web and desktop, hold **Shift** in the GitHub pull request list for quick actions.
 To close several, press **Close**, drag across the rows in the same group, and release.
 Press **Escape** before releasing to cancel. Failed closes stay in the list so you can retry them.
