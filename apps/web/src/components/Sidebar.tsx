@@ -250,6 +250,7 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarReviewShelf, useReviewRequests } from "./sidebar/SidebarReviewRequests";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
@@ -1062,6 +1063,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
   const routeThreadRef = resolveActiveThreadRouteRef(routeTarget, routeDraftThread);
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const reviewRequests = useReviewRequests({
+    threadRef: routeThreadRef,
+    draftProjectRef: routeDraftThread
+      ? scopeProjectRef(routeDraftThread.environmentId, routeDraftThread.projectId)
+      : null,
+  });
 
   // A selection made under one scope can hold threads the next scope hides.
   // The viewport outlives the scope and does not anchor, so a new list starts at the top.
@@ -3536,12 +3543,28 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             );
                             break;
                           case "settled-header":
+                            if (reviewRequests.length > 0) {
+                              items.push(
+                                <SidebarReviewShelf
+                                  key="review-shelf"
+                                  entries={reviewRequests}
+                                  threadRef={routeThreadRef}
+                                  className={cn(
+                                    workingThreads.length + snoozedThreads.length === 0 &&
+                                      "mt-auto",
+                                  )}
+                                />,
+                              );
+                            }
                             items.push(
                               <SidebarSectionHeader
                                 key="settled-shelf-header"
                                 marker="settled-header"
                                 className={cn(
-                                  workingThreads.length + snoozedThreads.length === 0 && "mt-auto",
+                                  workingThreads.length +
+                                    snoozedThreads.length +
+                                    reviewRequests.length ===
+                                    0 && "mt-auto",
                                 )}
                                 label="Settled"
                                 count={settledCount}

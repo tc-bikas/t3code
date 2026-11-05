@@ -178,6 +178,10 @@ Where you can edit a description, you can also tick its checkboxes from the Summ
 (the Overview tab on mobile).
 GitLab calls these merge requests.
 
+On web and desktop, the sidebar lists open pull requests waiting for your review under **Awaiting
+your review**, for the project of the thread you have open. The section is hidden when none are
+waiting. Select one to open it in **Pull requests**.
+
 On mobile, **Pull requests** lists reviews across your connected environments. Open a review
 to read its description, activity, commits, and changed files. Line comments stay as drafts
 until you submit the review. **Work on PR** opens a chat with the review attached; sending
