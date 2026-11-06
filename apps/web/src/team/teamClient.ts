@@ -16,7 +16,10 @@ import {
   TeamUser,
   TeamUserSearchResult,
   type TeamCreateOrganizationInput,
+  type TeamEditMessageInput,
   type TeamInviteInput,
+  type TeamReactionInput,
+  type TeamSendMessageInput,
   type TeamRole,
   type TeamUpdateOrganizationInput,
   type TeamUpdateProfileInput,
@@ -43,7 +46,7 @@ const decodeErrorBody = Schema.decodeUnknownOption(TeamErrorBody);
 const HealthResult = Schema.Struct({ ok: Schema.Boolean });
 
 interface TeamRequestInit {
-  readonly method: "GET" | "POST" | "PATCH" | "DELETE";
+  readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   readonly token: string | null;
   readonly body?: unknown;
 }
@@ -113,6 +116,8 @@ export function teamApi(serverUrl: string, token: string | null, onUnauthorized:
     guard(send(serverUrl, path, { method, token, body })).then(() => undefined);
   const org = (id: string) => `/orgs/${encodeURIComponent(id)}`;
   const conversation = (id: string) => `/conversations/${encodeURIComponent(id)}`;
+  const message = (id: string, messageId: string) =>
+    `${conversation(id)}/messages/${encodeURIComponent(messageId)}`;
 
   return {
     authConfig: () =>
@@ -177,8 +182,21 @@ export function teamApi(serverUrl: string, token: string | null, onUnauthorized:
         }`,
         TeamMessagesResult,
       ),
-    sendMessage: (conversationId: string, body: string) =>
-      write("POST", `${conversation(conversationId)}/messages`, { body }, TeamMessage),
+    sendMessage: (conversationId: string, input: TeamSendMessageInput) =>
+      write("POST", `${conversation(conversationId)}/messages`, input, TeamMessage),
+    editMessage: (conversationId: string, messageId: string, input: TeamEditMessageInput) =>
+      write("PATCH", message(conversationId, messageId), input, TeamMessage),
+    deleteMessage: (conversationId: string, messageId: string) =>
+      write("DELETE", message(conversationId, messageId), undefined, TeamMessage),
+    addReaction: (conversationId: string, messageId: string, input: TeamReactionInput) =>
+      write("PUT", `${message(conversationId, messageId)}/reactions`, input, TeamMessage),
+    removeReaction: (conversationId: string, messageId: string, emoji: string) =>
+      write(
+        "DELETE",
+        `${message(conversationId, messageId)}/reactions/${encodeURIComponent(emoji)}`,
+        undefined,
+        TeamMessage,
+      ),
     markRead: (conversationId: string, upToMessageId: string) =>
       send204("POST", `${conversation(conversationId)}/read`, { upToMessageId }),
   };

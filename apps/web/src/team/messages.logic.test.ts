@@ -6,7 +6,14 @@ import {
   createSseParser,
   dayLabel,
   groupMessagesByDay,
+  applyMessageUpdate,
+  applyReaction,
+  isOwnLiveMessage,
+  messagePreview,
   mergeMessages,
+  nextJumpStep,
+  reactionWho,
+  replySnippet,
   openConversationId,
   previewText,
   reconnectDelayMs,
@@ -22,6 +29,10 @@ const message = (id: string, createdAt = "2026-05-01T12:00:00"): TeamMessage => 
   senderId: "u1",
   body: `m${id}`,
   createdAt,
+  editedAt: null,
+  deleted: false,
+  replyTo: null,
+  reactions: [],
 });
 
 const conversation = (id: string, updatedAt: string, unreadCount = 0): TeamConversation => ({
@@ -127,5 +138,67 @@ describe("startsMessageRun", () => {
     expect(startsMessageRun(at("10:00:00"), at("10:04:59"))).toBe(false);
     expect(startsMessageRun(at("10:00:00"), at("10:05:01"))).toBe(true);
     expect(startsMessageRun(at("10:00:00"), { ...at("10:00:10"), senderId: "b" })).toBe(true);
+  });
+});
+
+describe("reactions", () => {
+  it("adds and removes one person's reaction idempotently", () => {
+    const added = applyReaction([], "👍", "me", true);
+    expect(added).toEqual([{ emoji: "👍", userIds: ["me"] }]);
+    expect(applyReaction(added, "👍", "me", true)).toBe(added);
+    const both = applyReaction(added, "👍", "ada", true);
+    expect(both).toEqual([{ emoji: "👍", userIds: ["me", "ada"] }]);
+    expect(applyReaction(both, "👍", "me", false)).toEqual([{ emoji: "👍", userIds: ["ada"] }]);
+    expect(applyReaction(added, "👍", "me", false)).toEqual([]);
+    expect(applyReaction(added, "❤️", "me", false)).toBe(added);
+  });
+
+  it("names who reacted, you first", () => {
+    const names = { me: "Me", ada: "Ada Demo" };
+    expect(reactionWho(["ada", "me"], "me", names)).toBe("You, Ada Demo");
+    expect(reactionWho(["ada", "zed"], "me", names)).toBe("Ada Demo, Someone");
+  });
+});
+
+describe("message updates", () => {
+  const reply = (id: string, to: string): TeamMessage => ({
+    ...message(id),
+    replyTo: { id: to, senderId: "u1", body: "old", deleted: false },
+  });
+
+  it("replaces a loaded message and refreshes quotes of it, but never adds an unloaded one", () => {
+    const loaded = [message("1"), reply("2", "1"), reply("3", "9")];
+    const deleted = { ...message("1"), body: "", deleted: true };
+    const next = applyMessageUpdate(loaded, deleted);
+    expect(next[0]).toBe(deleted);
+    expect(next[1]?.replyTo).toEqual({ id: "1", senderId: "u1", body: "", deleted: true });
+    expect(next[2]).toBe(loaded[2]);
+    expect(applyMessageUpdate(loaded, message("0"))).toBe(loaded);
+    const edited = applyMessageUpdate(loaded, { ...message("1"), body: "x".repeat(300) });
+    expect(edited[1]?.replyTo?.body).toHaveLength(200);
+  });
+
+  it("previews deleted messages and quotes", () => {
+    expect(messagePreview({ ...message("1"), body: "", deleted: true })).toBe("Message deleted");
+    expect(messagePreview({ ...message("1"), body: "**hi**" })).toBe("hi");
+    expect(replySnippet({ body: "", deleted: true })).toBe("Original message was deleted");
+    expect(replySnippet({ body: "a *b*\n\nc", deleted: false })).toBe("a b c");
+  });
+
+  it("allows edits only on your own live messages", () => {
+    expect(isOwnLiveMessage(message("1"), "u1")).toBe(true);
+    expect(isOwnLiveMessage(message("1"), "u2")).toBe(false);
+    expect(isOwnLiveMessage({ ...message("1"), deleted: true }, "u1")).toBe(false);
+  });
+});
+
+describe("nextJumpStep", () => {
+  it("finds, loads earlier pages, or gives up within the cap", () => {
+    expect(nextJumpStep(["5", "6"], true, "6")).toBe("found");
+    expect(nextJumpStep(["5", "6"], true, "2")).toBe("load-earlier");
+    expect(nextJumpStep(["5", "6"], false, "2")).toBe("give-up");
+    expect(nextJumpStep(["5", "7"], true, "6")).toBe("give-up");
+    expect(nextJumpStep(["5", "6"], true, "2", 2)).toBe("give-up");
+    expect(nextJumpStep([], true, "2")).toBe("give-up");
   });
 });

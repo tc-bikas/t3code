@@ -58,6 +58,13 @@ Markdown shortcuts such as `**bold**`, `` `code` ``, `- ` for lists and ``` for 
 conversation with **Retry** and **Discard**. Paste a link to share it; links open in your browser,
 and GitHub pull request links show as a compact `repo #number` chip.
 
+Hover a message, or tab to it, for its actions. **Add reaction** opens an emoji picker with a quick
+row and search; click a reaction under a message to add or remove yours, and hover it to see who
+reacted. **Reply** quotes the message above your next one; click the quote to jump to the original.
+On your own messages, **More** offers **Edit message**, which loads the text into the box (Enter
+saves, Esc cancels, and the message shows "(edited)"), and **Delete message**, which replaces it with
+"This message was deleted" for both of you. Esc also cancels a reply you are writing.
+
 When someone writes to you and you're not looking at that conversation, T3 Code notifies you the
 way it does for thread updates: a toast while the app is focused, a desktop notification
 otherwise. Both follow your notification settings. A conversation is marked read when you open it.

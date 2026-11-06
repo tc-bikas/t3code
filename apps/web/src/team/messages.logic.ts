@@ -1,4 +1,4 @@
-import type { TeamConversation, TeamMessage } from "@t3tools/contracts";
+import type { TeamConversation, TeamMessage, TeamReaction } from "@t3tools/contracts";
 
 import { markdownToPlainText } from "./messageMarkdown";
 
@@ -175,4 +175,100 @@ export function startsMessageRun(
 ): boolean {
   if (previous === undefined || previous.senderId !== message.senderId) return true;
   return Date.parse(message.createdAt) - Date.parse(previous.createdAt) > RUN_GAP_MS;
+}
+
+const DELETED_MESSAGE_PREVIEW = "Message deleted";
+const REPLY_PREVIEW_LENGTH = 120;
+const REPLY_BODY_LENGTH = 200;
+
+/** One line for notifications of a message; a deleted one says so. */
+export function messagePreview(message: TeamMessage, maxLength = 80): string {
+  return message.deleted ? DELETED_MESSAGE_PREVIEW : previewText(message.body, maxLength);
+}
+
+/** What a reply quote or the composer's "replying to" strip shows of the original. */
+export function replySnippet(original: {
+  readonly body: string;
+  readonly deleted: boolean;
+}): string {
+  return original.deleted
+    ? "Original message was deleted"
+    : previewText(original.body, REPLY_PREVIEW_LENGTH);
+}
+
+/** Only your own messages that still exist can be edited or deleted. */
+export function isOwnLiveMessage(message: TeamMessage, selfId: string): boolean {
+  return !message.deleted && message.senderId === selfId;
+}
+
+/** Adds or removes one person's reaction; an emoji nobody uses disappears. */
+export function applyReaction(
+  reactions: ReadonlyArray<TeamReaction>,
+  emoji: string,
+  userId: string,
+  on: boolean,
+): ReadonlyArray<TeamReaction> {
+  const current = reactions.find((reaction) => reaction.emoji === emoji);
+  if (on) {
+    if (current === undefined) return [...reactions, { emoji, userIds: [userId] }];
+    if (current.userIds.includes(userId)) return reactions;
+    return reactions.map((reaction) =>
+      reaction === current ? { emoji, userIds: [...reaction.userIds, userId] } : reaction,
+    );
+  }
+  if (current === undefined || !current.userIds.includes(userId)) return reactions;
+  const rest = current.userIds.filter((id) => id !== userId);
+  return rest.length === 0
+    ? reactions.filter((reaction) => reaction !== current)
+    : reactions.map((reaction) => (reaction === current ? { emoji, userIds: rest } : reaction));
+}
+
+/** "You, Ada Demo": you first, then the others in the order they reacted. */
+export function reactionWho(
+  userIds: ReadonlyArray<string>,
+  selfId: string,
+  names: Readonly<Record<string, string>>,
+): string {
+  const others = userIds.filter((id) => id !== selfId).map((id) => names[id] ?? "Someone");
+  return (userIds.includes(selfId) ? ["You", ...others] : others).join(", ");
+}
+
+/**
+ * Swaps in the new state of a loaded message and refreshes the quotes of loaded replies to it.
+ * A message that is not loaded stays out: adding it would leave a gap in the thread.
+ */
+export function applyMessageUpdate(
+  messages: ReadonlyArray<TeamMessage>,
+  updated: TeamMessage,
+): ReadonlyArray<TeamMessage> {
+  if (!messages.some((message) => message.id === updated.id)) return messages;
+  return messages.map((message) => {
+    if (message.id === updated.id) return updated;
+    const quote = message.replyTo;
+    if (quote?.id !== updated.id) return message;
+    return {
+      ...message,
+      replyTo: {
+        ...quote,
+        body: updated.deleted ? "" : updated.body.slice(0, REPLY_BODY_LENGTH),
+        deleted: updated.deleted,
+      },
+    };
+  });
+}
+
+export type JumpStep = "found" | "load-earlier" | "give-up";
+
+/** Whether a reply's original is loaded, worth loading earlier pages for, or out of reach. */
+export function nextJumpStep(
+  loadedIds: ReadonlyArray<string>,
+  hasMore: boolean,
+  targetId: string,
+  cap: number = MAX_MESSAGES_PER_CONVERSATION,
+): JumpStep {
+  if (loadedIds.includes(targetId)) return "found";
+  const oldest = loadedIds[0];
+  if (!hasMore || oldest === undefined || loadedIds.length >= cap) return "give-up";
+  // Newer than the oldest loaded message yet absent: earlier pages will never contain it.
+  return compareMessageIds(targetId, oldest) > 0 ? "give-up" : "load-earlier";
 }

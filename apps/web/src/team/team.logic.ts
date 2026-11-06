@@ -149,7 +149,7 @@ export function teamErrorMessage(code: TeamClientErrorCode, serverUrl: string): 
     case "unauthorized":
       return "You've been signed out. Sign in again to continue.";
     case "forbidden":
-      return "Your role in this organisation doesn't allow that.";
+      return "You don't have permission to do that.";
     case "not-found":
       return "That no longer exists. It may have been removed.";
     case "not-configured":

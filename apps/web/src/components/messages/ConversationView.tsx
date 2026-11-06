@@ -1,82 +1,74 @@
-import type { TeamConversation } from "@t3tools/contracts";
+import type { TeamConversation, TeamMessage } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { usePrimarySettings } from "../../hooks/useSettings";
-import { cn } from "../../lib/utils";
 import {
   dayLabel,
   groupMessagesByDay,
+  isOwnLiveMessage,
   MAX_MESSAGES_PER_CONVERSATION,
   startsMessageRun,
 } from "../../team/messages.logic";
 import {
+  deleteMessage,
   discardMessage,
   ensureThread,
   loadEarlier,
   retryMessage,
+  revealMessage,
+  setReaction,
   type MessagesScope,
   type ThreadState,
 } from "../../team/messagesStore";
 import { TeamAvatar } from "../../team/TeamAvatar";
 import { useTeamAccount } from "../../team/useTeam";
 import { formatShortTimestamp } from "../../timestampFormat";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
+import { Popover, PopoverPopup } from "../ui/popover";
 import { Spinner } from "../ui/spinner";
-import { MessageComposer } from "./MessageComposer";
+import { toastManager } from "../ui/toast";
+import { EmojiPicker } from "./EmojiPicker";
+import { MessageComposer, type ComposerMode } from "./MessageComposer";
 import { MessageMarkdown } from "./MessageMarkdown";
+import { MessageRow, ReplyQuote, ThreadMessageRow } from "./MessageRow";
 
 const NEAR_BOTTOM_PX = 96;
+const HIGHLIGHT_MS = 1600;
 
-/** Slack-style row: everyone's messages sit left, the name and avatar open each run. */
-function MessageRow({
-  author,
-  startsRun,
-  gapBefore,
-  time,
-  dimmed = false,
-  children,
-  footer,
-}: {
-  readonly author: { readonly name: string; readonly avatarUrl: string | null };
-  readonly startsRun: boolean;
-  /** Space above a run that follows other messages; grouped messages sit closer. */
-  readonly gapBefore: boolean;
-  readonly time: string;
-  readonly dimmed?: boolean;
-  readonly children: string;
-  readonly footer?: ReactNode;
-}) {
-  return (
-    <div
-      className={cn(
-        "group/message mx-2 flex gap-3 rounded-lg px-3 py-0.5 hover:bg-accent/40",
-        startsRun && "pt-1",
-        startsRun && gapBefore && "mt-4",
-      )}
-    >
-      <div className="w-10 shrink-0 self-start">
-        {startsRun ? (
-          <TeamAvatar name={author.name} avatarUrl={author.avatarUrl} />
-        ) : (
-          <span className="hidden pt-1.5 text-right text-3xs text-muted-foreground tabular-nums group-hover/message:block">
-            {time}
-          </span>
-        )}
-      </div>
-      <div className={cn("flex min-w-0 flex-1 flex-col", dimmed && "opacity-64")}>
-        {startsRun ? (
-          <div className="flex items-baseline gap-2 leading-6">
-            <span className="truncate text-sm font-semibold">{author.name}</span>
-            <span className="text-xs text-muted-foreground">{time}</span>
-          </div>
-        ) : null}
-        <MessageMarkdown body={children} />
-        {footer}
-      </div>
-    </div>
-  );
+interface Person {
+  readonly id: string;
+  readonly name: string;
+  readonly avatarUrl: string | null;
+}
+
+interface DeleteRequest {
+  readonly message: TeamMessage;
+  readonly busy: boolean;
+  readonly error: string | null;
+}
+
+/** Scrolls a message into view and fades a highlight over it, without anything left animating. */
+function revealRow(container: HTMLElement | null, messageId: string): boolean {
+  const row = container?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+  if (row === null || row === undefined) return false;
+  row.scrollIntoView({ block: "center" });
+  row.dataset.highlight = "true";
+  window.setTimeout(() => {
+    delete row.dataset.highlight;
+  }, HIGHLIGHT_MS);
+  return true;
 }
 
 function MessageList({
@@ -85,21 +77,29 @@ function MessageList({
   conversation,
   thread,
   self,
+  onReply,
+  onEdit,
 }: {
   readonly scope: MessagesScope;
   readonly conversationId: string;
   readonly conversation: TeamConversation;
   readonly thread: ThreadState;
-  readonly self: { readonly id: string; readonly name: string; readonly avatarUrl: string | null };
+  readonly self: Person;
+  readonly onReply: (message: TeamMessage) => void;
+  readonly onEdit: (message: TeamMessage) => void;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchor = useRef({ nearBottom: true, firstId: null as string | null, key: "", height: 0 });
+  const pendingJump = useRef<string | null>(null);
+  const [picker, setPicker] = useState<{ messageId: string; anchor: HTMLElement } | null>(null);
+  const [deleting, setDeleting] = useState<DeleteRequest | null>(null);
+  const { peer } = conversation;
   const groups = groupMessagesByDay(thread.messages);
   const firstId = thread.messages[0]?.id ?? null;
   const endKey = `${thread.messages.at(-1)?.id ?? ""}:${thread.pending.length}`;
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- positions the scroll container after the DOM updates: bottom on open and on new messages when already there, same place when older messages are prepended
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- positions the scroll container after the DOM updates: bottom on open and on new messages when already there, same place when older messages are prepended, then on a reply's original once it is rendered
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element === null) return;
@@ -112,7 +112,55 @@ function MessageList({
       element.scrollTop = element.scrollHeight;
     }
     anchor.current = { ...previous, firstId, key: endKey, height: element.scrollHeight };
+    const target = pendingJump.current;
+    if (target !== null && revealRow(element, target)) pendingJump.current = null;
   }, [firstId, endKey]);
+
+  const jumpTo = useStableCallback(async (messageId: string) => {
+    if (revealRow(scrollRef.current, messageId)) return;
+    pendingJump.current = messageId;
+    const found = await revealMessage(scope, conversationId, messageId);
+    if (!found) {
+      pendingJump.current = null;
+      toastManager.add({
+        type: "info",
+        title: "Original message not available",
+        description: "It is too far back to load here.",
+      });
+    }
+  });
+
+  const toggleReaction = useStableCallback(async (message: TeamMessage, emoji: string) => {
+    const mine = message.reactions.find((r) => r.emoji === emoji)?.userIds.includes(self.id);
+    const error = await setReaction(
+      scope,
+      conversationId,
+      message.id,
+      emoji,
+      self.id,
+      mine !== true,
+    );
+    if (error !== null) {
+      toastManager.add({ type: "error", title: "Couldn't update reaction", description: error });
+    }
+  });
+  const openPicker = useStableCallback((message: TeamMessage, element: HTMLElement) =>
+    setPicker({ messageId: message.id, anchor: element }),
+  );
+  const pickEmoji = (emoji: string) => {
+    const message = thread.messages.find((entry) => entry.id === picker?.messageId);
+    setPicker(null);
+    if (message !== undefined) void toggleReaction(message, emoji);
+  };
+  const askDelete = useStableCallback((message: TeamMessage) =>
+    setDeleting({ message, busy: false, error: null }),
+  );
+  const confirmDelete = async () => {
+    if (deleting === null) return;
+    setDeleting({ ...deleting, busy: true, error: null });
+    const error = await deleteMessage(scope, conversationId, deleting.message.id);
+    setDeleting(error === null ? null : { ...deleting, busy: false, error });
+  };
 
   const canLoadEarlier = thread.hasMore && thread.messages.length < MAX_MESSAGES_PER_CONVERSATION;
 
@@ -144,9 +192,7 @@ function MessageList({
         </p>
       ) : null}
       {thread.messages.length === 0 && thread.pending.length === 0 ? (
-        <p className="m-auto text-sm text-muted-foreground">
-          Say hello to {conversation.peer.name}.
-        </p>
+        <p className="m-auto text-sm text-muted-foreground">Say hello to {peer.name}.</p>
       ) : null}
       {groups.map((group) => (
         <section key={group.key} aria-label={dayLabel(group.startedAt)} className="flex flex-col">
@@ -157,29 +203,56 @@ function MessageList({
             </span>
             <span className="h-px flex-1 bg-border" aria-hidden="true" />
           </h2>
-          {group.messages.map((message, index) => (
-            <MessageRow
-              key={message.id}
-              author={message.senderId === self.id ? self : conversation.peer}
-              startsRun={startsMessageRun(group.messages[index - 1], message)}
-              gapBefore={index > 0}
-              time={formatShortTimestamp(message.createdAt, timestampFormat)}
-            >
-              {message.body}
-            </MessageRow>
-          ))}
+          {group.messages.map((message, index) => {
+            const mine = message.senderId === self.id;
+            return (
+              <ThreadMessageRow
+                key={message.id}
+                message={message}
+                authorName={mine ? self.name : peer.name}
+                authorAvatarUrl={mine ? self.avatarUrl : peer.avatarUrl}
+                startsRun={startsMessageRun(group.messages[index - 1], message)}
+                gapBefore={index > 0}
+                time={formatShortTimestamp(message.createdAt, timestampFormat)}
+                selfId={self.id}
+                selfName={self.name}
+                peerId={peer.id}
+                peerName={peer.name}
+                pickerOpen={picker?.messageId === message.id}
+                onReact={openPicker}
+                onToggleReaction={toggleReaction}
+                onReply={onReply}
+                onEdit={onEdit}
+                onDelete={askDelete}
+                onJump={jumpTo}
+              />
+            );
+          })}
         </section>
       ))}
       {thread.pending.map((entry, index) => {
         const previous = index === 0 ? thread.messages.at(-1) : undefined;
+        const original =
+          entry.replyToId === null
+            ? undefined
+            : thread.messages.find((message) => message.id === entry.replyToId);
         return (
           <MessageRow
             key={entry.localId}
-            author={self}
+            authorName={self.name}
+            authorAvatarUrl={self.avatarUrl}
             startsRun={index === 0 ? previous?.senderId !== self.id : false}
             gapBefore
             time=""
             dimmed={entry.status === "sending"}
+            quote={
+              original === undefined ? null : (
+                <ReplyQuote
+                  name={original.senderId === self.id ? self.name : peer.name}
+                  original={original}
+                />
+              )
+            }
             footer={
               entry.status === "sending" ? (
                 <span className="text-3xs text-muted-foreground">Sending…</span>
@@ -204,12 +277,61 @@ function MessageList({
               )
             }
           >
-            {entry.body}
+            <MessageMarkdown body={entry.body} />
           </MessageRow>
         );
       })}
+      <Popover open={picker !== null} onOpenChange={(open) => (open ? undefined : setPicker(null))}>
+        <PopoverPopup anchor={picker?.anchor} side="top" align="end" width="sm" padding="compact">
+          <EmojiPicker onPick={pickEmoji} />
+        </PopoverPopup>
+      </Popover>
+      <AlertDialog
+        open={deleting !== null}
+        onOpenChange={(open) => {
+          if (!open && deleting?.busy !== true) setDeleting(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this message?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It is removed for both of you and can't be brought back. Replies to it keep showing
+              that it was deleted.
+            </AlertDialogDescription>
+            {deleting?.error ? (
+              <p role="alert" className="text-sm text-destructive-foreground">
+                {deleting.error}
+              </p>
+            ) : null}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={deleting?.busy === true}
+              render={<Button variant="outline" disabled={deleting?.busy === true} />}
+            >
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={deleting?.busy === true}
+              onClick={() => void confirmDelete()}
+            >
+              {deleting?.busy ? <Spinner size="sm" /> : null}
+              Delete
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </div>
   );
+}
+
+let nextModeSerial = 0;
+
+function modeRequest(kind: "reply" | "edit", message: TeamMessage) {
+  nextModeSerial += 1;
+  return { kind, messageId: message.id, serial: nextModeSerial };
 }
 
 export function ConversationView({
@@ -226,6 +348,17 @@ export function ConversationView({
   readonly listReady: boolean;
 }) {
   const account = useTeamAccount();
+  const [request, setRequest] = useState<{
+    kind: "reply" | "edit";
+    messageId: string;
+    serial: number;
+  } | null>(null);
+  const onReply = useStableCallback((message: TeamMessage) =>
+    setRequest(modeRequest("reply", message)),
+  );
+  const onEdit = useStableCallback((message: TeamMessage) =>
+    setRequest(modeRequest("edit", message)),
+  );
   if (conversation === undefined) {
     const failed = thread?.status === "failed";
     return listReady || failed ? (
@@ -247,6 +380,21 @@ export function ConversationView({
   const { peer } = conversation;
   const me = account.session.status === "ready" ? account.session.me.user : null;
   const self = { id: me?.id ?? "", name: me?.name ?? "You", avatarUrl: me?.avatarUrl ?? null };
+  const target =
+    request === null ? undefined : thread?.messages.find((entry) => entry.id === request.messageId);
+  // A target that was deleted, or an edit of a message that is no longer yours to change, ends the mode.
+  const mode: ComposerMode | null =
+    request === null ||
+    target === undefined ||
+    target.deleted ||
+    (request.kind === "edit" && !isOwnLiveMessage(target, self.id))
+      ? null
+      : {
+          kind: request.kind,
+          message: target,
+          authorName: target.senderId === self.id ? "yourself" : peer.name,
+          serial: request.serial,
+        };
   return (
     <>
       <div className="flex items-center gap-3 border-b border-border px-4 py-2">
@@ -278,12 +426,16 @@ export function ConversationView({
             conversation={conversation}
             thread={thread}
             self={self}
+            onReply={onReply}
+            onEdit={onEdit}
           />
           <MessageComposer
             key={conversationId}
             scope={scope}
             conversationId={conversationId}
             sending={thread.pending.some((entry) => entry.status === "sending")}
+            mode={mode}
+            onModeDone={() => setRequest(null)}
           />
         </>
       )}

@@ -1,4 +1,4 @@
-import { TEAM_MESSAGE_MAX_LENGTH } from "@t3tools/contracts";
+import { TEAM_MESSAGE_MAX_LENGTH, type TeamMessage } from "@t3tools/contracts";
 import type { Editor, TiptapEditorHTMLElement } from "@tiptap/core";
 import type { EditorState } from "@tiptap/pm/state";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
@@ -9,16 +9,20 @@ import {
   ItalicIcon,
   LinkIcon,
   ListIcon,
+  PencilIcon,
+  ReplyIcon,
   SquareCodeIcon,
   StrikethroughIcon,
+  XIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { cn, isMacPlatform } from "../../lib/utils";
+import { markdownToEditorJson } from "../../team/markdownToEditorJson";
 import { editorJsonToMarkdown } from "../../team/messageMarkdown";
-import { showsMessageCounter } from "../../team/messages.logic";
-import { sendMessage, type MessagesScope } from "../../team/messagesStore";
+import { replySnippet, showsMessageCounter } from "../../team/messages.logic";
+import { editMessage, sendMessage, type MessagesScope } from "../../team/messagesStore";
 import { ComposerSurface } from "../chat/ComposerSurface";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -244,26 +248,110 @@ function FormattingToolbar({
   );
 }
 
+/** What the composer is doing besides writing a new message. `serial` changes on every request. */
+export interface ComposerMode {
+  readonly kind: "reply" | "edit";
+  readonly message: TeamMessage;
+  /** Who the reply goes to, for the strip above the editor. */
+  readonly authorName: string;
+  readonly serial: number;
+}
+
+function ModeStrip({
+  mode,
+  error,
+  onCancel,
+}: {
+  readonly mode: ComposerMode;
+  readonly error: string | null;
+  readonly onCancel: () => void;
+}) {
+  const editing = mode.kind === "edit";
+  const Icon = editing ? PencilIcon : ReplyIcon;
+  return (
+    <div className="flex flex-col gap-0.5 border-b border-border/60 pb-1.5">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+        {editing ? (
+          <span className="min-w-0 flex-1 truncate">
+            <span className="font-medium text-foreground">Editing message</span>
+            <span> · Enter to save, Esc to cancel</span>
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate">
+            Replying to <span className="font-medium text-foreground">{mode.authorName}</span>
+            <span> · {replySnippet(mode.message)}</span>
+          </span>
+        )}
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost-muted"
+          aria-label={editing ? "Cancel editing" : "Cancel reply"}
+          onClick={onCancel}
+        >
+          <XIcon />
+        </Button>
+      </div>
+      {error === null ? null : (
+        <p role="alert" className="text-xs text-destructive-foreground">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function MessageComposer({
   scope,
   conversationId,
   sending,
+  mode,
+  onModeDone,
 }: {
   readonly scope: MessagesScope;
   readonly conversationId: string;
   readonly sending: boolean;
+  readonly mode: ComposerMode | null;
+  readonly onModeDone: () => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [save, setSave] = useState<{ busy: boolean; error: string | null }>({
+    busy: false,
+    error: null,
+  });
+  const editing = mode?.kind === "edit";
+  const busy = editing ? save.busy : sending;
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkHref, setLinkHref] = useState("");
   const tooLong = draft.length > TEAM_MESSAGE_MAX_LENGTH;
-  const canSend = draft !== "" && !tooLong && !sending;
+  const canSend = draft !== "" && !tooLong && !busy;
 
-  const send = useStableCallback((target: Editor | null | undefined) => {
+  const send = useStableCallback(async (target: Editor | null | undefined) => {
     if (!canSend) return;
-    void sendMessage(scope, conversationId, draft);
+    if (mode?.kind === "edit") {
+      if (draft === mode.message.body) {
+        onModeDone();
+        return;
+      }
+      setSave({ busy: true, error: null });
+      const error = await editMessage(scope, conversationId, mode.message.id, draft);
+      setSave({ busy: false, error });
+      if (error === null) onModeDone();
+      return;
+    }
+    void sendMessage(scope, conversationId, draft, mode?.kind === "reply" ? mode.message.id : null);
     target?.chain().clearContent(true).focus().run();
+    if (mode !== null) onModeDone();
   });
+  // Escape leaves a reply or an edit whenever the editor has focus; the draft stays as it was.
+  const dismissMode = useStableCallback(() => {
+    if (mode === null) return false;
+    setSave({ busy: false, error: null });
+    onModeDone();
+    return true;
+  });
+  const modeBody = useStableCallback(() => (mode?.kind === "edit" ? mode.message.body : ""));
   const openLink = useStableCallback((open: boolean, target: Editor | null | undefined) => {
     if (open) setLinkHref(target?.getAttributes("link").href ?? "");
     setLinkOpen(open);
@@ -277,6 +365,7 @@ export function MessageComposer({
       attributes: { class: EDITOR_CLASS, "aria-label": "Message" },
       handleKeyDown: (view, event) => {
         if (event.isComposing || view.composing) return false;
+        if (event.key === "Escape") return dismissMode();
         const modifier = event.metaKey || event.ctrlKey;
         if (modifier && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
           openLink(true, (view.dom as TiptapEditorHTMLElement).editor);
@@ -285,13 +374,30 @@ export function MessageComposer({
         if (event.key !== "Enter" || event.shiftKey || event.altKey) return false;
         // Enter continues lists and code blocks; Mod+Enter sends from anywhere.
         if (!modifier && insideNode(view.state, ["codeBlock", "listItem"])) return false;
-        send((view.dom as TiptapEditorHTMLElement).editor);
+        void send((view.dom as TiptapEditorHTMLElement).editor);
         return true;
       },
     },
     onUpdate: ({ editor: updated }) => setDraft(editorJsonToMarkdown(updated.getJSON())),
   });
   const isEmpty = useEditorState({ editor, selector: ({ editor: current }) => current.isEmpty });
+  const modeSerial = mode?.serial;
+  const editSerial = editing ? modeSerial : undefined;
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the message being edited into the external editor, and puts the unsent draft back when the edit ends
+  useEffect(() => {
+    if (editor === null || editSerial === undefined) return;
+    const stash = editor.getJSON();
+    editor.commands.setContent(markdownToEditorJson(modeBody()), { emitUpdate: true });
+    editor.commands.focus("end");
+    return () => {
+      if (!editor.isDestroyed) editor.commands.setContent(stash, { emitUpdate: true });
+    };
+  }, [editor, editSerial, modeBody]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves browser focus into the editor when a reply starts
+  useEffect(() => {
+    if (editor !== null && modeSerial !== undefined) editor.commands.focus("end");
+  }, [editor, modeSerial]);
 
   return (
     <div className="flex flex-col gap-1 px-5 pt-1 pb-4">
@@ -299,6 +405,13 @@ export function MessageComposer({
         <ComposerSurface.Host>
           <ComposerSurface.Main>
             <div className="flex flex-col gap-1.5 rounded-2xl px-3 py-2.5">
+              {mode === null ? null : (
+                <ModeStrip
+                  mode={mode}
+                  error={editing ? save.error : null}
+                  onCancel={() => dismissMode()}
+                />
+              )}
               <div className="relative">
                 {isEmpty ? (
                   <span
@@ -324,12 +437,12 @@ export function MessageComposer({
                 )}
                 <button
                   type="button"
-                  aria-label={sending ? "Sending" : "Send message"}
+                  aria-label={busy ? "Sending" : editing ? "Save changes" : "Send message"}
                   disabled={!canSend}
-                  onClick={() => send(editor)}
+                  onClick={() => void send(editor)}
                   className="relative isolate flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:shadow-message-action/24 enabled:inset-shadow-control-highlight hover:bg-message-action-hover enabled:hover:scale-105 active:inset-shadow-control-pressed active:shadow-none disabled:pointer-events-none disabled:bg-foreground/12 disabled:text-muted-foreground disabled:shadow-none [&_svg]:pointer-events-none"
                 >
-                  {sending ? (
+                  {busy ? (
                     <Spinner size="sm" aria-hidden="true" />
                   ) : (
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">

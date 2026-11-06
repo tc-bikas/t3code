@@ -15,7 +15,7 @@ import {
 import {
   isIncomingMessage,
   openConversationId,
-  previewText,
+  messagePreview,
   reconnectDelayMs,
 } from "./messages.logic";
 import {
@@ -56,7 +56,7 @@ function waitFor(ms: number, signal: AbortSignal): Promise<void> {
 function announce(router: AnyRouter, conversation: TeamConversation, message: TeamMessage): void {
   const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();
   const title = conversation.peer.name;
-  const body = previewText(message.body, NOTIFICATION_BODY_LENGTH);
+  const body = messagePreview(message, NOTIFICATION_BODY_LENGTH);
   const open = () =>
     void router.navigate({
       to: "/messages/$conversationId",

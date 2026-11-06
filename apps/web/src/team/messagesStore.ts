@@ -4,11 +4,14 @@ import { Atom, type AtomRegistry } from "effect/reactivity";
 import { writeTeamToken } from "./teamStore";
 import { isTeamError, teamApi } from "./teamClient";
 import {
+  applyMessageUpdate,
+  applyReaction,
   compareMessageIds,
   markConversationRead,
   MAX_MESSAGES_PER_CONVERSATION,
   mergeMessages,
   MESSAGE_PAGE_SIZE,
+  nextJumpStep,
   totalUnread,
   upsertConversation,
 } from "./messages.logic";
@@ -16,6 +19,7 @@ import {
 export interface PendingMessage {
   readonly localId: string;
   readonly body: string;
+  readonly replyToId: string | null;
   readonly status: "sending" | "failed";
   readonly error: string | null;
 }
@@ -260,7 +264,47 @@ export function publishConversation(scope: MessagesScope, conversation: TeamConv
   }));
 }
 
+/**
+ * Puts the server's state of an edited, deleted or reacted-to message into its loaded thread.
+ * A carried conversation is the receiver's view and wins; otherwise a matching preview follows.
+ */
+function commitMessage(
+  scope: MessagesScope,
+  message: TeamMessage,
+  carried?: TeamConversation,
+): void {
+  update(scope, (state) => {
+    const thread = state.threads[message.conversationId];
+    return {
+      ...state,
+      conversations:
+        carried !== undefined
+          ? upsertConversation(state.conversations, carried)
+          : state.conversations.map((conversation) =>
+              conversation.id === message.conversationId &&
+              conversation.lastMessage?.id === message.id
+                ? { ...conversation, lastMessage: message }
+                : conversation,
+            ),
+      threads:
+        thread === undefined
+          ? state.threads
+          : {
+              ...state.threads,
+              [message.conversationId]: {
+                ...thread,
+                messages: applyMessageUpdate(thread.messages, message),
+              },
+            },
+    };
+  });
+}
+
 export function applyTeamEvent(scope: MessagesScope, event: TeamEvent): void {
+  if (event.type === "message-updated") {
+    commitMessage(scope, event.message, event.conversation);
+    return;
+  }
   if (event.type === "read") {
     update(scope, (state) => ({
       ...state,
@@ -294,9 +338,16 @@ export async function sendMessage(
   scope: MessagesScope,
   conversationId: string,
   body: string,
+  replyToId: string | null = null,
 ): Promise<void> {
   const localId = `local-${++nextLocalId}`;
-  await deliver(scope, conversationId, { localId, body, status: "sending", error: null });
+  await deliver(scope, conversationId, {
+    localId,
+    body,
+    replyToId,
+    status: "sending",
+    error: null,
+  });
 }
 
 export function retryMessage(scope: MessagesScope, conversationId: string, localId: string) {
@@ -320,7 +371,10 @@ async function deliver(scope: MessagesScope, conversationId: string, entry: Pend
     pending: [...thread.pending.filter((other) => other.localId !== entry.localId), entry],
   }));
   const result = await apiFor(scope)
-    .sendMessage(conversationId, entry.body)
+    .sendMessage(conversationId, {
+      body: entry.body,
+      ...(entry.replyToId === null ? {} : { replyToId: entry.replyToId }),
+    })
     .then(
       (message) => ({ message }),
       (error: unknown) => ({ error: failureMessage(error, scope.serverUrl) }),
@@ -361,6 +415,119 @@ async function deliver(scope: MessagesScope, conversationId: string, entry: Pend
       },
     };
   });
+}
+
+const patchMessage = (
+  scope: MessagesScope,
+  conversationId: string,
+  messageId: string,
+  change: (message: TeamMessage) => TeamMessage,
+) =>
+  updateThread(scope, conversationId, (thread) => ({
+    ...thread,
+    messages: thread.messages.map((message) =>
+      message.id === messageId ? change(message) : message,
+    ),
+  }));
+
+const reactionsInFlight = new Map<string, number>();
+
+/**
+ * Shows the reaction at once, then settles on the server's state. Resolves to a readable
+ * error after undoing the change, or null.
+ */
+export async function setReaction(
+  scope: MessagesScope,
+  conversationId: string,
+  messageId: string,
+  emoji: string,
+  userId: string,
+  on: boolean,
+): Promise<string | null> {
+  const key = `${stateKey(scope.serverUrl, scope.token)}:${conversationId}:${messageId}`;
+  const apply = (value: boolean) =>
+    patchMessage(scope, conversationId, messageId, (message) => ({
+      ...message,
+      reactions: applyReaction(message.reactions, emoji, userId, value),
+    }));
+  apply(on);
+  reactionsInFlight.set(key, (reactionsInFlight.get(key) ?? 0) + 1);
+  const api = apiFor(scope);
+  const result = await (
+    on
+      ? api.addReaction(conversationId, messageId, { emoji })
+      : api.removeReaction(conversationId, messageId, emoji)
+  ).then(
+    (message) => ({ message }),
+    (error: unknown) => ({ error: failureMessage(error, scope.serverUrl) }),
+  );
+  const remaining = (reactionsInFlight.get(key) ?? 1) - 1;
+  if (remaining === 0) reactionsInFlight.delete(key);
+  else reactionsInFlight.set(key, remaining);
+  if ("error" in result) {
+    apply(!on);
+    return result.error;
+  }
+  // While more taps are in flight this answer is already stale; the last one settles it.
+  if (remaining === 0) commitMessage(scope, result.message);
+  return null;
+}
+
+/** Resolves to a readable error, or null once the server has the new text. */
+export async function editMessage(
+  scope: MessagesScope,
+  conversationId: string,
+  messageId: string,
+  body: string,
+): Promise<string | null> {
+  const result = await apiFor(scope)
+    .editMessage(conversationId, messageId, { body })
+    .then(
+      (message) => ({ message }),
+      (error: unknown) => ({ error: failureMessage(error, scope.serverUrl) }),
+    );
+  if ("error" in result) return result.error;
+  commitMessage(scope, result.message);
+  return null;
+}
+
+export async function deleteMessage(
+  scope: MessagesScope,
+  conversationId: string,
+  messageId: string,
+): Promise<string | null> {
+  const result = await apiFor(scope)
+    .deleteMessage(conversationId, messageId)
+    .then(
+      (message) => ({ message }),
+      (error: unknown) => ({ error: failureMessage(error, scope.serverUrl) }),
+    );
+  if ("error" in result) return result.error;
+  commitMessage(scope, result.message);
+  return null;
+}
+
+const MAX_REVEAL_PAGES = Math.ceil(MAX_MESSAGES_PER_CONVERSATION / MESSAGE_PAGE_SIZE) + 1;
+
+/** Loads earlier pages until the message is in the thread. False when it cannot be reached. */
+export async function revealMessage(
+  scope: MessagesScope,
+  conversationId: string,
+  messageId: string,
+): Promise<boolean> {
+  for (let page = 0; page <= MAX_REVEAL_PAGES; page++) {
+    const thread = read(scope).threads[conversationId];
+    if (thread === undefined) return false;
+    const step = nextJumpStep(
+      thread.messages.map((message) => message.id),
+      thread.hasMore,
+      messageId,
+    );
+    if (step !== "load-earlier") return step === "found";
+    await loadEarlier(scope, conversationId);
+    if (read(scope).threads[conversationId]?.error != null) return false;
+  }
+  return false;
 }
 
 export function clearMessages(scope: MessagesScope): void {
