@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  Building2Icon,
   FlaskConicalIcon,
   BotIcon,
   createLucideIcon,
@@ -29,6 +30,7 @@ import {
   Settings2Icon,
   ShieldCheckIcon,
   SmartphoneIcon,
+  UserRoundIcon,
   WrenchIcon,
   XIcon,
 } from "lucide-react";
@@ -104,6 +106,8 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/connections": ServerIcon,
   "/settings/access": ShieldCheckIcon,
   "/settings/secrets": KeyRoundIcon,
+  "/settings/account": UserRoundIcon,
+  "/settings/organisation": Building2Icon,
   "/settings/maintenance": WrenchIcon,
   "/settings/labs": FlaskConicalIcon,
   "/settings/about": InfoIcon,

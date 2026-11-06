@@ -34,6 +34,8 @@ export type SettingsPath =
   | "/settings/connections"
   | "/settings/access"
   | "/settings/secrets"
+  | "/settings/account"
+  | "/settings/organisation"
   | "/settings/maintenance"
   | "/settings/labs"
   | "/settings/about"
@@ -104,6 +106,8 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/connections": "Environments",
   "/settings/access": "Sharing & access",
   "/settings/secrets": "Secrets",
+  "/settings/account": "Account",
+  "/settings/organisation": "Organisation",
   "/settings/maintenance": "Maintenance",
   "/settings/labs": "Labs",
   "/settings/about": "About",
@@ -147,6 +151,10 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/access",
       ...(isSecretsFeatureEnabled ? (["/settings/secrets"] as const) : []),
     ],
+  },
+  {
+    heading: "Team",
+    paths: ["/settings/account", "/settings/organisation"],
   },
   {
     heading: null,
@@ -216,6 +224,24 @@ const SOURCE_CONTROL_HOST_TERMS = sourceControlClients.definitions
   .join(" ");
 
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "account-sign-in",
+    title: "Sign in or create an account",
+    to: "/settings/account",
+    searchTerms: ["account login log in sign up register password email verify profile session"],
+  },
+  {
+    id: "team-server",
+    title: "Team server",
+    to: "/settings/account",
+    searchTerms: ["accounts organisations address url localhost test connection advanced"],
+  },
+  {
+    id: "organisation-auto-join",
+    title: "Organisation auto-join",
+    to: "/settings/organisation",
+    searchTerms: ["organization team domain members invite join automatically work email"],
+  },
   {
     id: "storage-worktree-keep-when",
     targetId: "storage-worktrees",
@@ -1216,6 +1242,8 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/connections": "connections",
   "/settings/access": "connections",
   "/settings/secrets": null,
+  "/settings/account": null,
+  "/settings/organisation": null,
   "/settings/scheduled-tasks": null,
   "/settings/maintenance": null,
   "/settings/labs": null,
