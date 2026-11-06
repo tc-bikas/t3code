@@ -122,6 +122,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   {
     heading: null,
     paths: [
+      "/settings/account",
       "/settings/general",
       "/settings/appearance",
       "/settings/chat",
@@ -154,7 +155,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   },
   {
     heading: "Team",
-    paths: ["/settings/account", "/settings/organisation"],
+    paths: ["/settings/organisation"],
   },
   {
     heading: null,
