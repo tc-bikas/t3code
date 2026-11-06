@@ -40,3 +40,8 @@ keep the two in step.
 Enter sends, so the fence handling in `handleKeyDown` must run before the send
 handler: checked afterwards, a fence never opens and a newline inside one sends
 the draft.
+
+Direct messages do not reuse this engine. Its inline tokens (`@path`, `$skill`, citation and
+context links) become chips as soon as they are typed, and `literalText` disables them only by
+also disabling rich text. The message composer is a small separate Tiptap editor that writes
+Markdown through [its own serializer](../../apps/web/src/team/messageMarkdown.ts), so "@alice" stays text.

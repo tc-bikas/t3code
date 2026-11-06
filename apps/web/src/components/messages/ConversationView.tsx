@@ -1,13 +1,6 @@
-import { TEAM_MESSAGE_MAX_LENGTH, type TeamConversation } from "@t3tools/contracts";
+import type { TeamConversation } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import {
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-  type ReactNode,
-} from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
@@ -15,84 +8,32 @@ import {
   dayLabel,
   groupMessagesByDay,
   MAX_MESSAGES_PER_CONVERSATION,
-  showsMessageCounter,
-  splitMessageText,
   startsMessageRun,
-  type MessageSegment,
 } from "../../team/messages.logic";
 import {
   discardMessage,
   ensureThread,
   loadEarlier,
   retryMessage,
-  sendMessage,
   type MessagesScope,
   type ThreadState,
 } from "../../team/messagesStore";
 import { TeamAvatar } from "../../team/TeamAvatar";
 import { useTeamAccount } from "../../team/useTeam";
-import { ensureLocalApi } from "../../localApi";
-import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
-import { ComposerSurface } from "../chat/ComposerSurface";
 import { Spinner } from "../ui/spinner";
+import { MessageComposer } from "./MessageComposer";
+import { MessageMarkdown } from "./MessageMarkdown";
 
 const NEAR_BOTTOM_PX = 96;
-
-const openLink = (url: string) => {
-  void ensureLocalApi().shell.openExternal(url);
-};
-
-function MessageText({ body }: { readonly body: string }) {
-  const keyed: Array<{ key: number; segment: MessageSegment }> = [];
-  let offset = 0;
-  for (const segment of splitMessageText(body)) {
-    keyed.push({ key: offset, segment });
-    offset += segment.kind === "text" ? segment.text.length : segment.url.length;
-  }
-  const parts = keyed.map(({ key, segment }) => {
-    if (segment.kind === "text") return <span key={key}>{segment.text}</span>;
-    const common = {
-      href: segment.url,
-      target: "_blank",
-      rel: "noreferrer noopener",
-      onClick: (event: MouseEvent<HTMLAnchorElement>) => {
-        event.preventDefault();
-        openLink(segment.url);
-      },
-    } as const;
-    return segment.kind === "link" ? (
-      <a
-        key={key}
-        {...common}
-        className="text-primary underline underline-offset-2 hover:text-primary/80"
-      >
-        {segment.url}
-      </a>
-    ) : (
-      <a
-        key={key}
-        {...common}
-        className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 align-middle text-xs text-foreground no-underline hover:bg-accent"
-      >
-        <PullRequestGlyph.pullRequest className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate">
-          {segment.repository} #{segment.number}
-        </span>
-      </a>
-    );
-  });
-  return (
-    <p className="min-w-0 text-sm wrap-anywhere whitespace-pre-wrap text-foreground">{parts}</p>
-  );
-}
 
 /** Slack-style row: everyone's messages sit left, the name and avatar open each run. */
 function MessageRow({
   author,
   startsRun,
+  gapBefore,
   time,
   dimmed = false,
   children,
@@ -100,6 +41,8 @@ function MessageRow({
 }: {
   readonly author: { readonly name: string; readonly avatarUrl: string | null };
   readonly startsRun: boolean;
+  /** Space above a run that follows other messages; grouped messages sit closer. */
+  readonly gapBefore: boolean;
   readonly time: string;
   readonly dimmed?: boolean;
   readonly children: string;
@@ -108,107 +51,30 @@ function MessageRow({
   return (
     <div
       className={cn(
-        "group/message flex gap-3 px-4 py-0.5 hover:bg-accent/40",
-        startsRun && "mt-2 pt-1",
+        "group/message mx-2 flex gap-3 rounded-lg px-3 py-0.5 hover:bg-accent/40",
+        startsRun && "pt-1",
+        startsRun && gapBefore && "mt-4",
       )}
     >
-      <div className="w-10 shrink-0">
+      <div className="w-10 shrink-0 self-start">
         {startsRun ? (
           <TeamAvatar name={author.name} avatarUrl={author.avatarUrl} />
         ) : (
-          <span className="hidden pt-1 text-right text-3xs text-muted-foreground tabular-nums group-hover/message:block">
+          <span className="hidden pt-1.5 text-right text-3xs text-muted-foreground tabular-nums group-hover/message:block">
             {time}
           </span>
         )}
       </div>
       <div className={cn("flex min-w-0 flex-1 flex-col", dimmed && "opacity-64")}>
         {startsRun ? (
-          <div className="flex items-baseline gap-2">
+          <div className="flex items-baseline gap-2 leading-6">
             <span className="truncate text-sm font-semibold">{author.name}</span>
             <span className="text-xs text-muted-foreground">{time}</span>
           </div>
         ) : null}
-        <MessageText body={children} />
+        <MessageMarkdown body={children} />
         {footer}
       </div>
-    </div>
-  );
-}
-
-function Composer({
-  scope,
-  conversationId,
-  sending,
-}: {
-  readonly scope: MessagesScope;
-  readonly conversationId: string;
-  readonly sending: boolean;
-}) {
-  const [draft, setDraft] = useState("");
-  const body = draft.trim();
-  const tooLong = draft.length > TEAM_MESSAGE_MAX_LENGTH;
-  const canSend = body !== "" && !tooLong && !sending;
-  const send = () => {
-    if (!canSend) return;
-    setDraft("");
-    void sendMessage(scope, conversationId, body);
-  };
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    send();
-  };
-  return (
-    <div className="flex flex-col gap-1 px-4 pt-1 pb-4">
-      <ComposerSurface.Shell>
-        <ComposerSurface.Host>
-          <ComposerSurface.Main>
-            <div className="flex items-end gap-2 rounded-2xl px-3 py-2.5">
-              <textarea
-                aria-label="Message"
-                placeholder="Write a message"
-                rows={1}
-                value={draft}
-                aria-invalid={tooLong || undefined}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={handleKeyDown}
-                className="max-h-48 min-h-6 min-w-0 flex-1 resize-none bg-transparent text-sm leading-6 [field-sizing:content] outline-none placeholder:text-placeholder"
-              />
-              <button
-                type="button"
-                aria-label={sending ? "Sending" : "Send message"}
-                disabled={!canSend}
-                onClick={send}
-                className="relative isolate flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:shadow-message-action/24 enabled:inset-shadow-control-highlight hover:bg-message-action-hover enabled:hover:scale-105 active:inset-shadow-control-pressed active:shadow-none disabled:pointer-events-none disabled:bg-foreground/12 disabled:text-muted-foreground disabled:shadow-none [&_svg]:pointer-events-none"
-              >
-                {sending ? (
-                  <Spinner size="sm" aria-hidden="true" />
-                ) : (
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path
-                      d="M8 3L8 13M8 3L4 7M8 3L12 7"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                )}
-              </button>
-            </div>
-          </ComposerSurface.Main>
-        </ComposerSurface.Host>
-      </ComposerSurface.Shell>
-      {showsMessageCounter(draft.length, TEAM_MESSAGE_MAX_LENGTH) ? (
-        <span
-          className={cn(
-            "self-end text-xs",
-            tooLong ? "text-destructive-foreground" : "text-muted-foreground",
-          )}
-        >
-          {draft.length} / {TEAM_MESSAGE_MAX_LENGTH}
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -253,7 +119,7 @@ function MessageList({
   return (
     <div
       ref={scrollRef}
-      className="scrollbar-gutter-both flex min-h-0 flex-1 flex-col overflow-y-auto py-3"
+      className="scrollbar-gutter-both flex min-h-0 flex-1 flex-col overflow-y-auto py-4"
       onScroll={(event) => {
         const element = event.currentTarget;
         anchor.current.nearBottom =
@@ -264,7 +130,7 @@ function MessageList({
         <Button
           size="sm"
           variant="ghost"
-          className="self-center"
+          className="mb-2 self-center"
           disabled={thread.loadingEarlier}
           onClick={() => void loadEarlier(scope, conversationId)}
         >
@@ -273,7 +139,7 @@ function MessageList({
         </Button>
       ) : null}
       {thread.error !== null && thread.status === "ready" ? (
-        <p role="alert" className="self-center text-xs text-destructive-foreground">
+        <p role="alert" className="mb-2 self-center text-xs text-destructive-foreground">
           {thread.error}
         </p>
       ) : null}
@@ -284,7 +150,7 @@ function MessageList({
       ) : null}
       {groups.map((group) => (
         <section key={group.key} aria-label={dayLabel(group.startedAt)} className="flex flex-col">
-          <h2 className="relative my-3 flex items-center px-4 text-xs font-medium text-foreground">
+          <h2 className="relative mt-5 mb-2 flex items-center px-5 text-xs font-medium text-foreground">
             <span className="h-px flex-1 bg-border" aria-hidden="true" />
             <span className="mx-3 rounded-full border border-border px-3 py-0.5">
               {dayLabel(group.startedAt)}
@@ -296,6 +162,7 @@ function MessageList({
               key={message.id}
               author={message.senderId === self.id ? self : conversation.peer}
               startsRun={startsMessageRun(group.messages[index - 1], message)}
+              gapBefore={index > 0}
               time={formatShortTimestamp(message.createdAt, timestampFormat)}
             >
               {message.body}
@@ -310,6 +177,7 @@ function MessageList({
             key={entry.localId}
             author={self}
             startsRun={index === 0 ? previous?.senderId !== self.id : false}
+            gapBefore
             time=""
             dimmed={entry.status === "sending"}
             footer={
@@ -411,7 +279,8 @@ export function ConversationView({
             thread={thread}
             self={self}
           />
-          <Composer
+          <MessageComposer
+            key={conversationId}
             scope={scope}
             conversationId={conversationId}
             sending={thread.pending.some((entry) => entry.status === "sending")}

@@ -53,7 +53,8 @@ unread messages. Messages are direct between two people who have T3 Code account
 an organisation.
 
 Choose **New message** at the bottom of the shelf, search for someone by name or GitHub login (at least two characters), and
-pick them. Enter sends, Shift+Enter adds a line. A message that fails to send stays in the
+pick them. Enter sends, Shift+Enter adds a line. Format text with the toolbar under the box or
+Markdown shortcuts such as `**bold**`, `` `code` ``, `- ` for lists and ``` for code blocks. A message that fails to send stays in the
 conversation with **Retry** and **Discard**. Paste a link to share it; links open in your browser,
 and GitHub pull request links show as a compact `repo #number` chip.
 

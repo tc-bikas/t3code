@@ -10,7 +10,7 @@ import {
   openConversationId,
   previewText,
   reconnectDelayMs,
-  splitMessageText,
+  parsePullRequestUrl,
   startsMessageRun,
   totalUnread,
   upsertConversation,
@@ -66,6 +66,7 @@ describe("previewText", () => {
   it("flattens whitespace and truncates", () => {
     expect(previewText("a\n\n b   c")).toBe("a b c");
     expect(previewText("x".repeat(100), 10)).toBe(`${"x".repeat(9)}…`);
+    expect(previewText("**Ship** it, see [the PR](https://x.test/1)")).toBe("Ship it, see the PR");
   });
 });
 
@@ -107,30 +108,15 @@ describe("helpers", () => {
   });
 });
 
-describe("splitMessageText", () => {
-  it("finds links and pull requests, and leaves sentence punctuation out of them", () => {
-    expect(
-      splitMessageText(
-        "Review https://github.com/acme/app/pull/42/files, then see (https://example.com/a_(b)) or https://example.com.",
-      ),
-    ).toEqual([
-      { kind: "text", text: "Review " },
-      {
-        kind: "pull-request",
-        url: "https://github.com/acme/app/pull/42/files",
-        repository: "acme/app",
-        number: 42,
-      },
-      { kind: "text", text: ", then see (" },
-      { kind: "link", url: "https://example.com/a_(b)" },
-      { kind: "text", text: ") or " },
-      { kind: "link", url: "https://example.com" },
-      { kind: "text", text: "." },
-    ]);
-    expect(splitMessageText("no links here")).toEqual([{ kind: "text", text: "no links here" }]);
-    expect(splitMessageText("https://github.com/acme/app/issues/3")).toEqual([
-      { kind: "link", url: "https://github.com/acme/app/issues/3" },
-    ]);
+describe("parsePullRequestUrl", () => {
+  it("reads GitHub pull request URLs only", () => {
+    expect(parsePullRequestUrl("https://github.com/acme/app/pull/42/files")).toEqual({
+      repository: "acme/app",
+      number: 42,
+    });
+    expect(parsePullRequestUrl("https://github.com/acme/app/issues/3")).toBeNull();
+    expect(parsePullRequestUrl("https://example.com/acme/app/pull/42")).toBeNull();
+    expect(parsePullRequestUrl("not a url")).toBeNull();
   });
 });
 

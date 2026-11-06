@@ -1,5 +1,7 @@
 import type { TeamConversation, TeamMessage } from "@t3tools/contracts";
 
+import { markdownToPlainText } from "./messageMarkdown";
+
 export const MAX_MESSAGES_PER_CONVERSATION = 500;
 export const MESSAGE_PAGE_SIZE = 50;
 
@@ -61,7 +63,7 @@ export function totalUnread(conversations: ReadonlyArray<TeamConversation>): num
 }
 
 export function previewText(body: string, maxLength = 80): string {
-  const flat = body.replace(/\s+/g, " ").trim();
+  const flat = markdownToPlainText(body);
   const letters = Array.from(flat);
   return letters.length > maxLength ? `${letters.slice(0, maxLength - 1).join("")}…` : flat;
 }
@@ -149,60 +151,19 @@ export function openConversationId(pathname: string): string | null {
   return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
 }
 
-export type MessageSegment =
-  | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "link"; readonly url: string }
-  | {
-      readonly kind: "pull-request";
-      readonly url: string;
-      readonly repository: string;
-      readonly number: number;
-    };
-
-const URL_PATTERN = /https?:\/\/[^\s<>"]+/g;
-const TRAILING_PUNCTUATION = /[.,;:!?'"\]}]+$/;
 const GITHUB_PULL_PATH = /^\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:\/|$)/;
 
-const count = (text: string, char: string) => text.split(char).length - 1;
-
-/** A URL at the end of a sentence loses its punctuation; a `)` stays only when the URL opened one. */
-function trimUrl(raw: string): string {
-  let url = raw.replace(TRAILING_PUNCTUATION, "");
-  while (url.endsWith(")") && count(url, ")") > count(url, "(")) {
-    url = url.slice(0, -1).replace(TRAILING_PUNCTUATION, "");
+/** The repository and number of a GitHub pull request URL, or null for any other URL. */
+export function parsePullRequestUrl(url: string): { repository: string; number: number } | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
   }
-  return url;
-}
-
-/** Splits a message into plain text, links, and GitHub pull request links. */
-export function splitMessageText(body: string): ReadonlyArray<MessageSegment> {
-  const segments: MessageSegment[] = [];
-  let cursor = 0;
-  const pushText = (end: number) => {
-    if (end > cursor) segments.push({ kind: "text", text: body.slice(cursor, end) });
-  };
-  for (const match of body.matchAll(URL_PATTERN)) {
-    const url = trimUrl(match[0]);
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      continue;
-    }
-    pushText(match.index);
-    cursor = match.index + url.length;
-    const pull =
-      parsed.hostname === "github.com" || parsed.hostname === "www.github.com"
-        ? GITHUB_PULL_PATH.exec(parsed.pathname)
-        : null;
-    segments.push(
-      pull?.[1] && pull[2]
-        ? { kind: "pull-request", url, repository: pull[1], number: Number(pull[2]) }
-        : { kind: "link", url },
-    );
-  }
-  pushText(body.length);
-  return segments;
+  if (parsed.hostname !== "github.com" && parsed.hostname !== "www.github.com") return null;
+  const pull = GITHUB_PULL_PATH.exec(parsed.pathname);
+  return pull?.[1] && pull[2] ? { repository: pull[1], number: Number(pull[2]) } : null;
 }
 
 const RUN_GAP_MS = 5 * 60_000;
