@@ -1,3 +1,5 @@
+import * as NodeFS from "node:fs";
+
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 
@@ -13,6 +15,8 @@ export interface Db extends Queryable {
 
 /** Embedded Postgres for local development; an in-memory instance when `dataDir` is omitted. */
 export async function openPglite(dataDir?: string): Promise<Db> {
+  // PGlite creates only the last path segment, so `.t3-team` itself must exist first.
+  if (dataDir !== undefined) NodeFS.mkdirSync(dataDir, { recursive: true });
   const lite = new PGlite(dataDir);
   await lite.waitReady;
   const wrap = (q: Pick<PGlite, "query" | "exec">): Queryable => ({
