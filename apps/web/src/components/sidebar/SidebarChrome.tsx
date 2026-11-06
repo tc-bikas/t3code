@@ -32,7 +32,6 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarAccountItem } from "./SidebarAccountItem";
-import { SidebarMessagesItem } from "./SidebarMessagesItem";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
@@ -216,11 +215,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/settings/account" });
   };
 
-  const handleMessagesClick = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/messages" });
-  };
-
   const handleUsageClick = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -245,7 +239,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       ) : (
         <>
           <SidebarAccountItem onOpen={handleAccountClick} />
-          <SidebarMessagesItem onOpen={handleMessagesClick} />
           <SidebarUtilityItem
             icon={<SettingsIcon />}
             label="Settings"

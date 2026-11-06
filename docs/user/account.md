@@ -47,17 +47,18 @@ gmail.com can't be claimed.
 
 ## Messages
 
-Once you're signed in, **Messages** appears in the sidebar footer. It sends direct messages
-between two people who have T3 Code accounts. You don't need an organisation.
+Once you're signed in, a **Direct messages** shelf appears in the sidebar, above Settled, and you
+can collapse it like the others. It lists the people you've talked to by name, and a number shows
+unread messages. Messages are direct between two people who have T3 Code accounts; you don't need
+an organisation.
 
-Choose **New message**, search for someone by name or GitHub login (at least two characters), and
+Choose **New message** at the bottom of the shelf, search for someone by name or GitHub login (at least two characters), and
 pick them. Enter sends, Shift+Enter adds a line. A message that fails to send stays in the
 conversation with **Retry** and **Discard**. Paste a link to share it; links open in your browser,
 and GitHub pull request links show as a compact `repo #number` chip.
 
 When someone writes to you and you're not looking at that conversation, T3 Code notifies you the
 way it does for thread updates: a toast while the app is focused, a desktop notification
-otherwise. Both follow your notification settings. A number on the Messages icon counts unread
-messages, and a conversation is marked read when you open it.
+otherwise. Both follow your notification settings. A conversation is marked read when you open it.
 
 Deleting your account removes your conversations and messages.

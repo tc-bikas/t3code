@@ -1,6 +1,5 @@
 import { TEAM_MESSAGE_MAX_LENGTH, type TeamConversation } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeftIcon } from "lucide-react";
 import {
   useLayoutEffect,
   useRef,
@@ -383,15 +382,6 @@ export function ConversationView({
   return (
     <>
       <div className="flex items-center gap-3 border-b border-border px-4 py-2">
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Back to conversations"
-          className="md:hidden"
-          render={<Link to="/messages" />}
-        >
-          <ArrowLeftIcon aria-hidden="true" />
-        </Button>
         <TeamAvatar name={peer.name} avatarUrl={peer.avatarUrl} />
         <div className="flex min-w-0 flex-col">
           <h2 className="truncate text-sm font-medium">{peer.name}</h2>

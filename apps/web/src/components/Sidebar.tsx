@@ -250,7 +250,9 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarMessagesShelf } from "./sidebar/SidebarMessagesShelf";
 import { SidebarReviewShelf, useReviewRequests } from "./sidebar/SidebarReviewRequests";
+import { useTeamAccount } from "../team/useTeam";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
@@ -1063,6 +1065,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
   const routeThreadRef = resolveActiveThreadRouteRef(routeTarget, routeDraftThread);
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const showDirectMessages = useTeamAccount().token !== null;
   const reviewRequests = useReviewRequests({
     threadRef: routeThreadRef,
     draftProjectRef: routeDraftThread
@@ -3543,6 +3546,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             );
                             break;
                           case "settled-header":
+                            if (showDirectMessages) {
+                              items.push(
+                                <SidebarMessagesShelf
+                                  key="messages-shelf"
+                                  className={cn(
+                                    workingThreads.length + snoozedThreads.length === 0 &&
+                                      "mt-auto",
+                                  )}
+                                />,
+                              );
+                            }
                             if (reviewRequests.length > 0) {
                               items.push(
                                 <SidebarReviewShelf
@@ -3550,8 +3564,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   entries={reviewRequests}
                                   threadRef={routeThreadRef}
                                   className={cn(
-                                    workingThreads.length + snoozedThreads.length === 0 &&
-                                      "mt-auto",
+                                    workingThreads.length +
+                                      snoozedThreads.length +
+                                      (showDirectMessages ? 1 : 0) ===
+                                      0 && "mt-auto",
                                   )}
                                 />,
                               );
@@ -3563,7 +3579,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 className={cn(
                                   workingThreads.length +
                                     snoozedThreads.length +
-                                    reviewRequests.length ===
+                                    reviewRequests.length +
+                                    (showDirectMessages ? 1 : 0) ===
                                     0 && "mt-auto",
                                 )}
                                 label="Settled"
