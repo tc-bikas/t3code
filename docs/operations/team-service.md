@@ -8,7 +8,7 @@
 vp run dev:team
 ```
 
-It listens on `http://127.0.0.1:3790`. With no `DATABASE_URL` it uses embedded Postgres ([PGlite](https://pglite.dev)) stored in `.t3-team/pgdata` under the working directory, so nothing needs installing. Mail is printed to the terminal, and responses carry a `devLink` so you can finish verification, reset and invitation flows without reading it.
+It listens on `http://127.0.0.1:3790`. With no `DATABASE_URL` it uses embedded Postgres ([PGlite](https://pglite.dev)) stored in `.t3-team/pgdata` under the working directory, so nothing needs installing. Mail is printed to the terminal, and responses carry a `devLink` so you can finish verification and reset flows without reading it.
 
 ## Environment
 

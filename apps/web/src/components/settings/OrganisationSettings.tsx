@@ -8,7 +8,6 @@ import type {
 } from "@t3tools/contracts";
 import { useState, type ReactNode } from "react";
 
-import { DevMailLink } from "../../team/DevMailLink";
 import { TeamTextField } from "../../team/TeamFields";
 import {
   autoJoinEligibility,
@@ -391,7 +390,6 @@ function OrganisationDetail({
   const permissions = organizationPermissions(role);
   const [leaving, setLeaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [inviteLink, setInviteLink] = useState<string | null>(null);
   const memberTask = useTeamTask(account.serverUrl);
   const inviteTask = useTeamTask(account.serverUrl);
   const autoJoinTask = useTeamTask(account.serverUrl);
@@ -498,16 +496,8 @@ function OrganisationDetail({
             account={account}
             organizationId={organization.id}
             task={inviteTask}
-            onInvited={(link) => {
-              setInviteLink(link);
-              onChanged();
-            }}
+            onInvited={() => onChanged()}
           />
-          {inviteLink ? (
-            <div className="px-3 py-3 sm:px-4">
-              <DevMailLink devLink={inviteLink} label="Open invitation link" />
-            </div>
-          ) : null}
           {invites.map((invite) => (
             <SettingsRow
               key={invite.id}
@@ -695,7 +685,7 @@ function InviteForm({
   readonly account: Account;
   readonly organizationId: string;
   readonly task: ReturnType<typeof useTeamTask>;
-  readonly onInvited: (devLink: string | null) => void;
+  readonly onInvited: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<TeamRole>("member");
@@ -711,10 +701,10 @@ function InviteForm({
         const inviteRole = role === "admin" ? "admin" : "member";
         void task.run(
           () => account.api.invite(organizationId, { email: email.trim(), role: inviteRole }),
-          (result) => {
+          () => {
             setEmail("");
             setSubmitted(false);
-            onInvited(result.devLink ?? null);
+            onInvited();
           },
         );
       }}

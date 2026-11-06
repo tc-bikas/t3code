@@ -11,15 +11,7 @@ import type {
   TeamSetMemberRoleInput,
   TeamUpdateOrganizationInput,
 } from "@t3tools/contracts";
-import {
-  after,
-  devLink,
-  iso,
-  nowIso,
-  sendMail,
-  type TeamContext,
-  type UserRow,
-} from "./context.ts";
+import { after, iso, nowIso, sendMail, type TeamContext, type UserRow } from "./context.ts";
 import { isUniqueViolation, type Queryable } from "./db.ts";
 import { emailDomain, isPublicEmailDomain, isValidDomain, normalizeEmail } from "./domains.ts";
 import { inviteMail } from "./email.ts";
@@ -329,10 +321,7 @@ export async function inviteMember(
     return { invite: row, organizationName: org.name };
   });
   await sendMail(ctx, inviteMail(email, organizationName, user.name, input.role));
-  return {
-    invite: toPendingInvite(invite),
-    ...devLink(ctx, `${ctx.publicUrl}/v1/invitations/${invite.id}/accept`),
-  };
+  return { invite: toPendingInvite(invite) };
 }
 
 export async function revokeInvite(

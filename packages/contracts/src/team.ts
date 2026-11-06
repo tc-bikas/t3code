@@ -178,10 +178,7 @@ export const TeamInviteInput = Schema.Struct({
 });
 export type TeamInviteInput = typeof TeamInviteInput.Type;
 
-export const TeamInviteResult = Schema.Struct({
-  invite: TeamPendingInvite,
-  devLink: Schema.optional(Schema.String),
-});
+export const TeamInviteResult = Schema.Struct({ invite: TeamPendingInvite });
 export type TeamInviteResult = typeof TeamInviteResult.Type;
 
 export const TeamSetMemberRoleInput = Schema.Struct({ role: TeamRole });

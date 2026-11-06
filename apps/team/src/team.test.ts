@@ -504,7 +504,6 @@ describe("invitations", () => {
         role: "member",
         invitedByName: "Olivia",
       });
-      expect(first.result.devLink).toContain(first.result.invite.id);
       expect(t.mails.at(-1)?.text).toContain("Olivia invited you to join Acme");
       expect(t.mails.at(-1)?.text).toContain("Settings > Organisation");
 
