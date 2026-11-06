@@ -172,6 +172,7 @@ export const TeamErrorCode = Schema.Literals([
   "forbidden",
   "not-found",
   "not-configured",
+  "rate-limited",
   "domain-not-allowed",
   "last-owner",
   "already-member",

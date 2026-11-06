@@ -37,6 +37,6 @@ export function consume(
   { limit, windowMs }: { limit: number; windowMs: number },
 ): void {
   if (limiter.hit(key, windowMs) > limit) {
-    throw new TeamError("unavailable", "Too many sign-in attempts. Try again in a few minutes.");
+    throw new TeamError("rate-limited", "Too many sign-in attempts. Try again in a few minutes.");
   }
 }

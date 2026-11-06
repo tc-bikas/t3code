@@ -31,7 +31,7 @@ export async function startGithubSignIn(
     "SELECT count(*)::int AS count FROM github_sign_ins",
   );
   if (count >= MAX_OUTSTANDING_ATTEMPTS) {
-    throw new TeamError("unavailable", "Too many sign-ins are in progress. Try again shortly.");
+    throw new TeamError("rate-limited", "Too many sign-ins are in progress. Try again shortly.");
   }
   const state = NodeCrypto.randomBytes(32).toString("hex");
   const codeVerifier = NodeCrypto.randomBytes(32).toString("base64url");

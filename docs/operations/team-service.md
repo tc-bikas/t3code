@@ -58,7 +58,7 @@ Invitations are not emailed; people see them in the app. An invitation or an aut
 
 ## Routes
 
-Errors are `{ "error": { "code", "message" } }`. Statuses: invalid-input 400, unauthorized 401, forbidden 403, not-found 404, not-configured 503, domain-not-allowed 400, last-owner 409, already-member 409, invite-expired 410, unavailable 503 (also used when too many sign-ins start from one IP).
+Errors are `{ "error": { "code", "message" } }`. Statuses: invalid-input 400, unauthorized 401, forbidden 403, not-found 404, not-configured 503, domain-not-allowed 400, last-owner 409, already-member 409, invite-expired 410, unavailable 503, rate-limited 429 (too many sign-ins start from one IP).
 
 | Route                                               | Auth    | Notes                                                                      |
 | --------------------------------------------------- | ------- | -------------------------------------------------------------------------- |

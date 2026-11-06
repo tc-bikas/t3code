@@ -154,6 +154,8 @@ export function teamErrorMessage(code: TeamClientErrorCode, serverUrl: string): 
       return "That no longer exists. It may have been removed.";
     case "not-configured":
       return "GitHub sign-in isn't set up on this Team server yet.";
+    case "rate-limited":
+      return "Too many attempts. Wait a few minutes and try again.";
     case "domain-not-allowed":
       return "That domain can't be used for auto-join. Use a work email verified on your GitHub account.";
     case "last-owner":

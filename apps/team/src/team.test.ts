@@ -335,7 +335,7 @@ describe("GitHub sign-in", () => {
     await withTeam(async (t) => {
       for (let i = 0; i < 20; i++) await t.start();
       const refused = await t.call("POST", "/v1/auth/github/start", { body: {} });
-      expect(refused.status).toBe(503);
+      expect(refused.status).toBe(429);
       const other = await t.call("POST", "/v1/auth/github/start", { body: {}, ip: "10.0.0.2" });
       expect(other.status).toBe(200);
       t.advance(11 * MINUTE);
