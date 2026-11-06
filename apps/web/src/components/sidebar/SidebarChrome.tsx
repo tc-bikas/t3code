@@ -238,6 +238,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </SidebarMenuItem>
       ) : (
         <>
+          <SidebarAccountItem onOpen={handleAccountClick} />
           <SidebarUtilityItem
             icon={<SettingsIcon />}
             label="Settings"
@@ -255,7 +256,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
-          <SidebarAccountItem onOpen={handleAccountClick} />
         </>
       )}
       <SidebarThreadUndoNotice />
