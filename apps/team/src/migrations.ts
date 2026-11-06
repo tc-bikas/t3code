@@ -120,6 +120,32 @@ const MIGRATIONS: ReadonlyArray<string> = [
   );
   CREATE INDEX invites_email_idx ON invites(email);
   `,
+  `
+  CREATE TABLE conversations (
+    id uuid PRIMARY KEY,
+    user_a text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_b text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    CHECK (user_a < user_b),
+    UNIQUE (user_a, user_b)
+  );
+  CREATE INDEX conversations_user_b_idx ON conversations(user_b);
+  CREATE TABLE messages (
+    id bigserial PRIMARY KEY,
+    conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    sender_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body text NOT NULL,
+    created_at timestamptz NOT NULL
+  );
+  CREATE INDEX messages_conversation_idx ON messages(conversation_id, id DESC);
+  CREATE TABLE conversation_reads (
+    conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    last_read_message_id bigint NOT NULL,
+    PRIMARY KEY (conversation_id, user_id)
+  );
+  `,
 ];
 
 export async function migrate(db: Db): Promise<void> {

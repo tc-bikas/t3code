@@ -35,8 +35,9 @@ export function consume(
   limiter: RateLimiter,
   key: string,
   { limit, windowMs }: { limit: number; windowMs: number },
+  message = "Too many sign-in attempts. Try again in a few minutes.",
 ): void {
   if (limiter.hit(key, windowMs) > limit) {
-    throw new TeamError("rate-limited", "Too many sign-in attempts. Try again in a few minutes.");
+    throw new TeamError("rate-limited", message);
   }
 }

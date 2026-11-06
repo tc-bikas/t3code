@@ -1,5 +1,7 @@
 import { loadConfig } from "./config.ts";
 import { openPglite, openPostgres } from "./db.ts";
+import { realEvery } from "./context.ts";
+import { createEventBus } from "./events.ts";
 import { createGithubClient } from "./github.ts";
 import { migrate } from "./migrations.ts";
 import { createRateLimiter } from "./rateLimit.ts";
@@ -17,6 +19,9 @@ const server = createTeamServer({
   limiter: createRateLimiter(now),
   now,
   publicUrl: config.publicUrl,
+  allowedEmailDomains: config.allowedEmailDomains,
+  events: createEventBus(),
+  every: realEvery,
 });
 
 server.listen(config.port, config.host, () => {

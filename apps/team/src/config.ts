@@ -6,6 +6,8 @@ export interface TeamConfig {
   readonly databaseUrl: string | undefined;
   readonly dataDir: string;
   readonly publicUrl: string;
+  /** Empty means open sign-in. */
+  readonly allowedEmailDomains: ReadonlyArray<string>;
   /** Present only when both the client id and the secret are set. */
   readonly github: { readonly clientId: string; readonly clientSecret: string } | undefined;
 }
@@ -23,6 +25,10 @@ export function loadConfig(env: NodeJS.ProcessEnv, cwd: string): TeamConfig {
     databaseUrl: env.DATABASE_URL || undefined,
     dataDir: env.TEAM_DATA_DIR || NodePath.join(cwd, ".t3-team", "pgdata"),
     publicUrl: (env.TEAM_PUBLIC_URL || "http://localhost:3790").replace(/\/+$/, ""),
+    allowedEmailDomains: (env.TEAM_ALLOWED_EMAIL_DOMAINS ?? "")
+      .split(",")
+      .map((domain) => domain.trim().toLowerCase())
+      .filter(Boolean),
     github: clientId && clientSecret ? { clientId, clientSecret } : undefined,
   };
 }

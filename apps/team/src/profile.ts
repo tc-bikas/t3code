@@ -32,7 +32,7 @@ export async function updateProfile(
   return toTeamUser({ ...user, name });
 }
 
-/** A sole owner cannot walk away from an organisation that still has people in it. */
+/** A sole owner cannot walk away from an organisation that still has people in it. Direct messages go with the account, for the other person too. */
 export async function deleteAccount(ctx: TeamContext, user: UserRow): Promise<void> {
   await ctx.db.transaction(async (tx) => {
     const orphaned = await tx.query<{ org_id: string; members: number }>(
@@ -57,6 +57,7 @@ export async function deleteAccount(ctx: TeamContext, user: UserRow): Promise<vo
       "DELETE FROM invites WHERE email IN (SELECT email FROM user_emails WHERE user_id = $1)",
       [user.id],
     );
+    await tx.query("DELETE FROM conversations WHERE user_a = $1 OR user_b = $1", [user.id]);
     await tx.query("DELETE FROM users WHERE id = $1", [user.id]);
   });
 }

@@ -42,8 +42,11 @@ export async function authenticate(
   const rows = await ctx.db.query<UserRow & { session_id: string; last_used_at: Date | string }>(
     `SELECT u.*, s.id AS session_id, s.last_used_at
        FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = $1 AND s.expires_at > $2`,
-    [sha256(token), nowIso(ctx)],
+      WHERE s.token_hash = $1 AND s.expires_at > $2
+        AND (cardinality($3::text[]) = 0 OR EXISTS (
+          SELECT 1 FROM user_emails e
+           WHERE e.user_id = u.id AND split_part(e.email, '@', 2) = ANY($3::text[])))`,
+    [sha256(token), nowIso(ctx), ctx.allowedEmailDomains],
   );
   const row = rows[0];
   if (!row) throw denied;

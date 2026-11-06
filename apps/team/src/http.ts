@@ -16,6 +16,15 @@ export interface Reply {
   readonly status: number;
   readonly json?: unknown;
   readonly html?: string;
+  /** Turns the reply into a server-sent event stream; `status` must be 200. */
+  readonly stream?: (out: EventStreamOut) => void;
+}
+
+export interface EventStreamOut {
+  write(chunk: string): void;
+  end(): void;
+  /** Runs once when the stream ends, from either side. */
+  onClose(listener: () => void): void;
 }
 
 export interface Route {

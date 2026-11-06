@@ -173,6 +173,7 @@ export const TeamErrorCode = Schema.Literals([
   "not-found",
   "not-configured",
   "rate-limited",
+  "not-allowed",
   "domain-not-allowed",
   "last-owner",
   "already-member",
@@ -185,3 +186,72 @@ export const TeamErrorBody = Schema.Struct({
   error: Schema.Struct({ code: TeamErrorCode, message: Schema.String }),
 });
 export type TeamErrorBody = typeof TeamErrorBody.Type;
+
+export const TEAM_MESSAGE_MAX_LENGTH = 4000;
+
+/** Another person as a conversation shows them. */
+export const TeamPerson = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  githubLogin: Schema.String,
+  avatarUrl: Schema.NullOr(Schema.String),
+});
+export type TeamPerson = typeof TeamPerson.Type;
+
+export const TeamMessage = Schema.Struct({
+  /** Increases with send order across the service; compare as numbers, page with it as a cursor. */
+  id: Schema.String,
+  conversationId: Schema.String,
+  senderId: Schema.String,
+  body: Schema.String,
+  createdAt: Schema.String,
+});
+export type TeamMessage = typeof TeamMessage.Type;
+
+/** A direct conversation as one of its two people sees it. */
+export const TeamConversation = Schema.Struct({
+  id: Schema.String,
+  peer: TeamPerson,
+  lastMessage: Schema.NullOr(TeamMessage),
+  unreadCount: Schema.Number,
+  updatedAt: Schema.String,
+});
+export type TeamConversation = typeof TeamConversation.Type;
+
+export const TeamUserSearchResult = Schema.Struct({ users: Schema.Array(TeamPerson) });
+export type TeamUserSearchResult = typeof TeamUserSearchResult.Type;
+
+export const TeamConversationsResult = Schema.Struct({
+  conversations: Schema.Array(TeamConversation),
+});
+export type TeamConversationsResult = typeof TeamConversationsResult.Type;
+
+export const TeamStartConversationInput = Schema.Struct({ userId: Schema.String });
+export type TeamStartConversationInput = typeof TeamStartConversationInput.Type;
+
+export const TeamMessagesResult = Schema.Struct({
+  /** Oldest first. */
+  messages: Schema.Array(TeamMessage),
+  hasMore: Schema.Boolean,
+});
+export type TeamMessagesResult = typeof TeamMessagesResult.Type;
+
+export const TeamSendMessageInput = Schema.Struct({
+  body: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(TEAM_MESSAGE_MAX_LENGTH)),
+});
+export type TeamSendMessageInput = typeof TeamSendMessageInput.Type;
+
+export const TeamMarkReadInput = Schema.Struct({ upToMessageId: Schema.String });
+export type TeamMarkReadInput = typeof TeamMarkReadInput.Type;
+
+/** One `data:` line of `GET /v1/events` (server-sent events), JSON-encoded. */
+export const TeamEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("message"),
+    message: TeamMessage,
+    /** The conversation from the receiving person's side, with its unread count after this message. */
+    conversation: TeamConversation,
+  }),
+  Schema.Struct({ type: Schema.Literal("read"), conversationId: Schema.String }),
+]);
+export type TeamEvent = typeof TeamEvent.Type;

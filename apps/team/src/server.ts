@@ -3,6 +3,7 @@ import { authRoutes } from "./authRoutes.ts";
 import type { TeamContext } from "./context.ts";
 import { TEAM_ERROR_STATUS, TeamError } from "./errors.ts";
 import type { Reply, Route } from "./http.ts";
+import { dmRoutes } from "./dmRoutes.ts";
 import { meRoutes } from "./meRoutes.ts";
 import { orgRoutes } from "./orgRoutes.ts";
 import { pageRoutes } from "./pages.ts";
@@ -17,6 +18,7 @@ const ROUTES: ReadonlyArray<Route> = [
   },
   ...authRoutes,
   ...meRoutes,
+  ...dmRoutes,
   ...orgRoutes,
   ...pageRoutes,
 ];
@@ -131,6 +133,25 @@ function send(res: NodeHttp.ServerResponse, reply: Reply): void {
     payload = JSON.stringify(reply.json);
   }
   if (reply.status === 413) headers.connection = "close";
+  if (reply.stream) {
+    Object.assign(headers, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-accel-buffering": "no",
+    });
+    res.writeHead(reply.status, headers);
+    const listeners: Array<() => void> = [];
+    let closed = false;
+    res.on("close", () => {
+      closed = true;
+      for (const listener of listeners) listener();
+    });
+    reply.stream({
+      write: (chunk) => void (!closed && res.write(chunk)),
+      end: () => res.end(),
+      onClose: (listener) => void listeners.push(listener),
+    });
+    return;
+  }
   res.writeHead(reply.status, headers);
   res.end(payload);
 }

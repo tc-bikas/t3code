@@ -1,5 +1,6 @@
 import type { TeamUser } from "@t3tools/contracts";
 import type { Db } from "./db.ts";
+import type { EventBus } from "./events.ts";
 import type { GithubClient } from "./github.ts";
 import type { RateLimiter } from "./rateLimit.ts";
 
@@ -12,7 +13,17 @@ export interface TeamContext {
   readonly limiter: RateLimiter;
   readonly now: () => number;
   readonly publicUrl: string;
+  readonly allowedEmailDomains: ReadonlyArray<string>;
+  readonly events: EventBus;
+  /** Repeats `fn` every `ms` until the returned function is called. Injected so tests can tick by hand. */
+  readonly every: (ms: number, fn: () => void) => () => void;
 }
+
+export const realEvery: TeamContext["every"] = (ms, fn) => {
+  const timer = setInterval(fn, ms);
+  timer.unref();
+  return () => clearInterval(timer);
+};
 
 export interface UserRow {
   id: string;

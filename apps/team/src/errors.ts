@@ -7,6 +7,7 @@ export const TEAM_ERROR_STATUS: Record<TeamErrorCode, number> = {
   "not-found": 404,
   "not-configured": 503,
   "rate-limited": 429,
+  "not-allowed": 403,
   "domain-not-allowed": 400,
   "last-owner": 409,
   "already-member": 409,

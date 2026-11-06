@@ -151,6 +151,17 @@ export async function completeGithubSignIn(
     return fail(message);
   }
 
+  if (!hasAllowedEmail(ctx, emails)) {
+    // A returning user who no longer qualifies loses their sessions too.
+    await ctx.db.query(
+      "DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE github_id = $1)",
+      [profile.id],
+    );
+    const message = `Add and verify an email at one of: ${ctx.allowedEmailDomains.join(", ")} on your GitHub account, then try again.`;
+    await setFailed(ctx, state, message);
+    return fail(message);
+  }
+
   const user = await ctx.db.transaction((tx) => upsertUser(ctx, tx, profile, emails));
   const session = await createSession(ctx, user.id, attempt.device_label ?? undefined);
   await ctx.db.query(
@@ -158,6 +169,14 @@ export async function completeGithubSignIn(
     [state, session.token, session.expiresAt, user.id],
   );
   return { ok: true, message: "You're signed in. You can close this tab and return to T3 Code." };
+}
+
+function hasAllowedEmail(ctx: TeamContext, emails: ReadonlyArray<GithubEmail>): boolean {
+  if (ctx.allowedEmailDomains.length === 0) return true;
+  return emails.some(
+    (entry) =>
+      entry.verified && ctx.allowedEmailDomains.includes(emailDomain(normalizeEmail(entry.email))),
+  );
 }
 
 /** Mirrors the GitHub account: profile, verified emails, and auto-join memberships. */

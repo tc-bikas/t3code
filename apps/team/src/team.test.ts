@@ -1,6 +1,12 @@
 import type {
   TeamAuthConfig,
   TeamAuthResult,
+  TeamConversation,
+  TeamConversationsResult,
+  TeamEvent,
+  TeamMessage,
+  TeamMessagesResult,
+  TeamUserSearchResult,
   TeamGithubPollResult,
   TeamGithubStartResult,
   TeamInviteResult,
@@ -12,9 +18,11 @@ import * as NodeCrypto from "node:crypto";
 import type * as NodeNet from "node:net";
 import { describe, expect, it } from "vite-plus/test";
 import { openPglite } from "./db.ts";
+import { createEventBus } from "./events.ts";
 import type { GithubClient, GithubEmail, GithubProfile } from "./github.ts";
 import { migrate } from "./migrations.ts";
 import { createRateLimiter } from "./rateLimit.ts";
+import type { EventStreamOut } from "./http.ts";
 import { createTeamServer, handleRequest } from "./server.ts";
 
 const MINUTE = 60 * 1000;
@@ -63,9 +71,9 @@ interface SignInOptions {
 
 async function withTeam(
   fn: (t: Awaited<ReturnType<typeof createHarness>>) => Promise<void>,
-  options: { configured?: boolean } = {},
+  options: { configured?: boolean; allowedEmailDomains?: ReadonlyArray<string> } = {},
 ) {
-  const t = await createHarness(options.configured ?? true);
+  const t = await createHarness(options.configured ?? true, options.allowedEmailDomains ?? []);
   try {
     await fn(t);
   } finally {
@@ -73,7 +81,7 @@ async function withTeam(
   }
 }
 
-async function createHarness(configured: boolean) {
+async function createHarness(configured: boolean, allowedEmailDomains: ReadonlyArray<string>) {
   const db = await openPglite();
   await migrate(db);
   let clock = Date.parse("2030-01-01T00:00:00Z");
@@ -87,7 +95,14 @@ async function createHarness(configured: boolean) {
     limiter: createRateLimiter(now),
     now,
     publicUrl: "http://team.test",
+    allowedEmailDomains,
+    events: createEventBus(),
+    every: (_ms: number, fn: () => void) => {
+      tickers.add(fn);
+      return () => void tickers.delete(fn);
+    },
   };
+  const tickers = new Set<() => void>();
 
   const call = async (
     method: string,
@@ -101,7 +116,52 @@ async function createHarness(configured: boolean) {
       body: options.body === undefined ? "" : JSON.stringify(options.body),
       ip: options.ip ?? "10.0.0.1",
     });
-    return { status: reply.status, json: reply.json, html: reply.html };
+    return { status: reply.status, json: reply.json, html: reply.html, stream: reply.stream };
+  };
+
+  /** Opens `GET /v1/events` without a socket; `close` plays the client hanging up. */
+  const openEvents = async (token: string) => {
+    const reply = await call("GET", "/v1/events", { token });
+    const chunks: string[] = [];
+    const closers: Array<() => void> = [];
+    let ended = false;
+    const out: EventStreamOut = {
+      write: (chunk) => void chunks.push(chunk),
+      end: () => {
+        ended = true;
+        for (const closer of closers) closer();
+      },
+      onClose: (listener) => void closers.push(listener),
+    };
+    reply.stream?.(out);
+    return {
+      status: reply.status,
+      chunks,
+      events: () =>
+        chunks
+          .filter((chunk) => chunk.startsWith("data: "))
+          .map((chunk) => JSON.parse(chunk.slice(6)) as TeamEvent),
+      isEnded: () => ended,
+      close: out.end,
+    };
+  };
+  /** Fires the ping timers and lets their session checks settle. */
+  const ping = async () => {
+    for (const fn of tickers) fn();
+    await ctx.db.query("SELECT 1", []);
+    await ctx.db.query("SELECT 1", []);
+  };
+
+  const startDm = async (token: string, userId: string) => {
+    const reply = await call("POST", "/v1/conversations", { token, body: { userId } });
+    return { ...reply, conversation: reply.json as TeamConversation };
+  };
+  const send = async (token: string, conversationId: string, body: string) => {
+    const reply = await call("POST", `/v1/conversations/${conversationId}/messages`, {
+      token,
+      body: { body },
+    });
+    return { ...reply, message: reply.json as TeamMessage };
   };
 
   const start = async (deviceLabel?: string) => {
@@ -183,6 +243,11 @@ async function createHarness(configured: boolean) {
     createOrg,
     invite,
     join,
+    openEvents,
+    ping,
+    startDm,
+    send,
+    tickers,
     advance: (ms: number) => {
       clock += ms;
     },
@@ -530,8 +595,24 @@ describe("organisations", () => {
       expect([blocked.status, errorCode(blocked)]).toEqual([409, "last-owner"]);
       expect((await t.call("GET", "/v1/me", { token: owner.token })).status).toBe(200);
 
+      const thread = await t.startDm(solo.token, member.id);
+      await t.send(solo.token, thread.conversation.id, "bye");
+
       const aloneGone = await t.call("DELETE", "/v1/me", { token: solo.token });
       expect(aloneGone.status).toBe(204);
+      expect(
+        await t.db.query("SELECT 1 FROM conversations WHERE id = $1::uuid", [
+          thread.conversation.id,
+        ]),
+      ).toHaveLength(0);
+      expect(
+        await t.db.query("SELECT 1 FROM messages WHERE conversation_id = $1::uuid", [
+          thread.conversation.id,
+        ]),
+      ).toHaveLength(0);
+      expect((await t.call("GET", "/v1/conversations", { token: member.token })).json).toEqual({
+        conversations: [],
+      });
       const orgs = await t.db.query<{ id: string }>("SELECT id FROM organizations WHERE id = $1", [
         soloOrg.organization.id,
       ]);
@@ -764,6 +845,9 @@ describe("http adapter", () => {
       limiter: createRateLimiter(now),
       now,
       publicUrl: "http://team.test",
+      allowedEmailDomains: [],
+      events: createEventBus(),
+      every: () => () => undefined,
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as NodeNet.AddressInfo).port}`;
@@ -796,5 +880,271 @@ describe("http adapter", () => {
       await new Promise((resolve) => server.close(resolve));
       await db.close();
     }
+  });
+});
+
+describe("direct messages", () => {
+  const people = async (t: Awaited<ReturnType<typeof createHarness>>) => ({
+    ann: await t.account("ann@x.test", "Ann Lee"),
+    bob: await t.account("bob@x.test", "Bob Ray"),
+    cat: await t.account("cat@x.test", "Cat Fox"),
+  });
+
+  it("searches by login or name, excluding the caller", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob } = await people(t);
+      const search = async (q: string) =>
+        (await t.call("GET", `/v1/users/search?q=${encodeURIComponent(q)}`, { token: ann.token }))
+          .json as TeamUserSearchResult;
+      expect((await search("bob")).users.map((u) => u.id)).toEqual([bob.id]);
+      expect((await search("  RAY ")).users.map((u) => u.githubLogin)).toEqual([bob.login]);
+      expect((await search("x-test")).users.map((u) => u.githubLogin)).toEqual([
+        bob.login,
+        "cat-x-test",
+      ]);
+      expect((await search("ann")).users).toEqual([]);
+      expect((await search("b")).users).toEqual([]);
+      expect((await search("%%")).users).toEqual([]);
+      expect((await search("x".repeat(51))).users).toEqual([]);
+      expect((await t.call("GET", "/v1/users/search?q=bob")).status).toBe(401);
+
+      for (let i = 0; i < 12; i++) await t.account(`many${i}@x.test`);
+      expect((await search("many")).users).toHaveLength(10);
+    });
+  });
+
+  it("starts one conversation per pair from either side and under a race", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob } = await people(t);
+      const [one, two] = await Promise.all([
+        t.startDm(ann.token, bob.id),
+        t.startDm(bob.token, ann.id),
+      ]);
+      expect(one.conversation.id).toBe(two.conversation.id);
+      expect(one.conversation.peer.id).toBe(bob.id);
+      expect(two.conversation.peer.id).toBe(ann.id);
+      expect(one.conversation).toMatchObject({ lastMessage: null, unreadCount: 0 });
+      const again = await t.startDm(ann.token, bob.id);
+      expect(again.conversation.id).toBe(one.conversation.id);
+      expect(await t.db.query("SELECT 1 FROM conversations")).toHaveLength(1);
+
+      expect(errorCode(await t.startDm(ann.token, ann.id))).toBe("invalid-input");
+      expect(errorCode(await t.startDm(ann.token, "nobody"))).toBe("not-found");
+    });
+  });
+
+  it("sends, lists and pages messages", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, cat } = await people(t);
+      const { conversation } = await t.startDm(ann.token, bob.id);
+      const id = conversation.id;
+      const sent: TeamMessage[] = [];
+      for (let i = 1; i <= 5; i++)
+        sent.push((await t.send(i % 2 ? ann.token : bob.token, id, `  m${i} `)).message);
+      expect(sent.map((m) => m.body)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+      expect(sent[0]).toMatchObject({ conversationId: id, senderId: ann.id });
+
+      const page = async (query: string) =>
+        (await t.call("GET", `/v1/conversations/${id}/messages${query}`, { token: bob.token }))
+          .json as TeamMessagesResult;
+      expect((await page("")).messages.map((m) => m.body)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+      const newest = await page("?limit=2");
+      expect(newest.messages.map((m) => m.body)).toEqual(["m4", "m5"]);
+      expect(newest.hasMore).toBe(true);
+      const older = await page(`?limit=2&before=${newest.messages[0]?.id}`);
+      expect(older.messages.map((m) => m.body)).toEqual(["m2", "m3"]);
+      const oldest = await page(`?limit=2&before=${older.messages[0]?.id}`);
+      expect([oldest.messages.map((m) => m.body), oldest.hasMore]).toEqual([["m1"], false]);
+
+      const reply = await t.call("GET", `/v1/conversations/${id}/messages?limit=101`, {
+        token: bob.token,
+      });
+      expect(errorCode(reply)).toBe("invalid-input");
+      expect(errorCode(await t.send(ann.token, id, "   "))).toBe("invalid-input");
+      expect(errorCode(await t.send(ann.token, id, "x".repeat(4001)))).toBe("invalid-input");
+
+      const list = (await t.call("GET", "/v1/conversations", { token: ann.token }))
+        .json as TeamConversationsResult;
+      expect(list.conversations).toHaveLength(1);
+      expect(list.conversations[0]?.lastMessage?.body).toBe("m5");
+
+      const other = await t.startDm(ann.token, cat.id);
+      t.advance(1000);
+      await t.send(ann.token, other.conversation.id, "hi cat");
+      const ordered = (await t.call("GET", "/v1/conversations", { token: ann.token }))
+        .json as TeamConversationsResult;
+      expect(ordered.conversations.map((c) => c.peer.id)).toEqual([cat.id, bob.id]);
+    });
+  });
+
+  it("shows a conversation only to its two participants", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, cat } = await people(t);
+      const { conversation } = await t.startDm(ann.token, bob.id);
+      const sent = (await t.send(ann.token, conversation.id, "secret")).message;
+      const base = `/v1/conversations/${conversation.id}`;
+      const status = async (method: string, path: string, body?: unknown) => {
+        const reply = await t.call(method, `${base}${path}`, { token: cat.token, body });
+        return [reply.status, errorCode(reply)];
+      };
+      expect(await status("GET", "/messages")).toEqual([404, "not-found"]);
+      expect(await status("POST", "/messages", { body: "hi" })).toEqual([404, "not-found"]);
+      expect(await status("POST", "/read", { upToMessageId: sent.id })).toEqual([404, "not-found"]);
+      expect((await t.call("GET", "/v1/conversations", { token: cat.token })).json).toEqual({
+        conversations: [],
+      });
+      const bogus = await t.call("GET", "/v1/conversations/not-a-uuid/messages", {
+        token: ann.token,
+      });
+      expect(bogus.status).toBe(404);
+    });
+  });
+
+  it("counts unread messages and only moves the read marker forward", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, cat } = await people(t);
+      const { conversation } = await t.startDm(ann.token, bob.id);
+      const id = conversation.id;
+      const m1 = (await t.send(ann.token, id, "1")).message;
+      const m2 = (await t.send(ann.token, id, "2")).message;
+      const m3 = (await t.send(ann.token, id, "3")).message;
+      await t.send(bob.token, id, "reply");
+      const unread = async (token: string) =>
+        ((await t.call("GET", "/v1/conversations", { token })).json as TeamConversationsResult)
+          .conversations[0]?.unreadCount;
+      expect([await unread(bob.token), await unread(ann.token)]).toEqual([3, 1]);
+
+      const read = (token: string, upToMessageId: string) =>
+        t.call("POST", `/v1/conversations/${id}/read`, { token, body: { upToMessageId } });
+      expect((await read(bob.token, m2.id)).status).toBe(204);
+      expect(await unread(bob.token)).toBe(1);
+      await read(bob.token, m1.id);
+      expect(await unread(bob.token)).toBe(1);
+      await read(bob.token, m3.id);
+      expect(await unread(bob.token)).toBe(0);
+
+      const elsewhere = await t.startDm(ann.token, cat.id);
+      const foreign = (await t.send(cat.token, elsewhere.conversation.id, "x")).message;
+      await read(ann.token, foreign.id);
+      expect(await unread(ann.token)).toBe(1);
+      expect((await read(bob.token, "abc")).status).toBe(400);
+    });
+  });
+
+  it("limits sending to 30 messages a minute per user", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob } = await people(t);
+      const { conversation } = await t.startDm(ann.token, bob.id);
+      for (let i = 0; i < 30; i++)
+        expect((await t.send(ann.token, conversation.id, "x")).status).toBe(200);
+      const limited = await t.send(ann.token, conversation.id, "x");
+      expect([limited.status, errorCode(limited)]).toEqual([429, "rate-limited"]);
+      expect((await t.send(bob.token, conversation.id, "still fine")).status).toBe(200);
+      t.advance(61 * 1000);
+      expect((await t.send(ann.token, conversation.id, "x")).status).toBe(200);
+    });
+  });
+
+  it("streams events to both people with their own unread counts, and read to the reader", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, cat } = await people(t);
+      const annPhone = await t.openEvents(ann.token);
+      const annLaptop = await t.openEvents(ann.token);
+      const bobStream = await t.openEvents(bob.token);
+      const catStream = await t.openEvents(cat.token);
+      const { conversation } = await t.startDm(ann.token, bob.id);
+
+      const message = (await t.send(ann.token, conversation.id, "hello")).message;
+      const [forAnn] = annPhone.events();
+      const [forBob] = bobStream.events();
+      expect(forAnn).toMatchObject({ type: "message", message });
+      expect(forBob).toMatchObject({ type: "message", message });
+      if (forAnn?.type !== "message" || forBob?.type !== "message") throw new Error("no message");
+      expect([forAnn.conversation.peer.id, forAnn.conversation.unreadCount]).toEqual([bob.id, 0]);
+      expect([forBob.conversation.peer.id, forBob.conversation.unreadCount]).toEqual([ann.id, 1]);
+      expect(annLaptop.events()).toHaveLength(1);
+      expect(catStream.events()).toEqual([]);
+
+      await t.call("POST", `/v1/conversations/${conversation.id}/read`, {
+        token: bob.token,
+        body: { upToMessageId: message.id },
+      });
+      expect(bobStream.events().at(-1)).toEqual({ type: "read", conversationId: conversation.id });
+      expect(annPhone.events()).toHaveLength(1);
+    });
+  });
+
+  it("pings on the injected timer, ends on a revoked session, and cleans up on close", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob } = await people(t);
+      const stream = await t.openEvents(ann.token);
+      expect(stream.status).toBe(200);
+      expect(t.tickers.size).toBe(1);
+      await t.ping();
+      expect(stream.chunks.at(-1)).toBe(": ping\n\n");
+      expect(stream.isEnded()).toBe(false);
+
+      const sessions = (await t.call("GET", "/v1/me/sessions", { token: ann.token }))
+        .json as TeamSessionsResult;
+      await t.db.query("DELETE FROM sessions WHERE id = $1", [sessions.sessions[0]?.id]);
+      await t.ping();
+      expect(stream.isEnded()).toBe(true);
+      expect(t.tickers.size).toBe(0);
+
+      const second = await t.openEvents(bob.token);
+      second.close();
+      expect(t.tickers.size).toBe(0);
+      expect((await t.call("GET", "/v1/events")).status).toBe(401);
+    });
+  });
+});
+
+describe("allowed email domains", () => {
+  it("lets in only people with a verified email at an allowed domain", async () => {
+    await withTeam(
+      async (t) => {
+        const ok = await t.signInAs("ok", {
+          emails: [
+            { email: "x@gmail.com", primary: true, verified: true },
+            { email: "Me@Together.TEST", primary: false, verified: true },
+          ],
+        });
+        expect(ok.result.status).toBe("complete");
+
+        const unverified = await t.signInAs("unverified", {
+          emails: [{ email: "u@together.test", primary: true, verified: false }],
+        });
+        expect(unverified.result).toEqual({
+          status: "failed",
+          message:
+            "Add and verify an email at one of: together.test, other.test on your GitHub account, then try again.",
+        });
+        expect(
+          await t.db.query("SELECT 1 FROM users WHERE github_login = 'unverified'"),
+        ).toHaveLength(0);
+        expect((await t.signInAs("none")).result.status).toBe("failed");
+      },
+      { allowedEmailDomains: ["together.test", "other.test"] },
+    );
+  });
+
+  it("refuses sign-in and revokes sessions of people who stop qualifying", async () => {
+    await withTeam(
+      async (t) => {
+        const person = await t.account("old@together.test");
+        const other = await t.account("other@together.test");
+        expect((await t.call("GET", "/v1/me", { token: person.token })).status).toBe(200);
+
+        const lost = await t.signInAs(person.login, {
+          emails: [{ email: "old@gmail.com", primary: true, verified: true }],
+        });
+        expect(lost.result.status).toBe("failed");
+        expect((await t.call("GET", "/v1/me", { token: person.token })).status).toBe(401);
+
+        await t.db.query("DELETE FROM user_emails WHERE user_id = $1", [other.id]);
+        expect((await t.call("GET", "/v1/me", { token: other.token })).status).toBe(401);
+      },
+      { allowedEmailDomains: ["together.test"] },
+    );
   });
 });
