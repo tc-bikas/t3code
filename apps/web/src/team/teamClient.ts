@@ -1,14 +1,20 @@
 import {
   TeamAuthConfig,
+  TeamConversation,
+  TeamConversationsResult,
   TeamErrorBody,
   TeamErrorCode,
+  TeamEvent,
   TeamGithubPollResult,
   TeamGithubStartResult,
   TeamMe,
+  TeamMessage,
+  TeamMessagesResult,
   TeamOrganizationDetail,
   TeamInviteResult,
   TeamSessionsResult,
   TeamUser,
+  TeamUserSearchResult,
   type TeamCreateOrganizationInput,
   type TeamInviteInput,
   type TeamRole,
@@ -17,6 +23,7 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
+import { createSseParser } from "./messages.logic";
 import { teamErrorMessage } from "./team.logic";
 
 export class TeamError extends Schema.TaggedError<TeamError>()("TeamError", {
@@ -105,6 +112,7 @@ export function teamApi(serverUrl: string, token: string | null, onUnauthorized:
   const send204 = (method: TeamRequestInit["method"], path: string, body?: unknown) =>
     guard(send(serverUrl, path, { method, token, body })).then(() => undefined);
   const org = (id: string) => `/orgs/${encodeURIComponent(id)}`;
+  const conversation = (id: string) => `/conversations/${encodeURIComponent(id)}`;
 
   return {
     authConfig: () =>
@@ -157,7 +165,81 @@ export function teamApi(serverUrl: string, token: string | null, onUnauthorized:
       ),
     declineInvitation: (id: string) =>
       send204("POST", `/invitations/${encodeURIComponent(id)}/decline`),
+    searchUsers: (query: string) =>
+      get(`/users/search?q=${encodeURIComponent(query)}`, TeamUserSearchResult),
+    conversations: () => get("/conversations", TeamConversationsResult),
+    startConversation: (userId: string) =>
+      write("POST", "/conversations", { userId }, TeamConversation),
+    messages: (conversationId: string, options: { before?: string; limit: number }) =>
+      get(
+        `${conversation(conversationId)}/messages?limit=${options.limit}${
+          options.before === undefined ? "" : `&before=${encodeURIComponent(options.before)}`
+        }`,
+        TeamMessagesResult,
+      ),
+    sendMessage: (conversationId: string, body: string) =>
+      write("POST", `${conversation(conversationId)}/messages`, { body }, TeamMessage),
+    markRead: (conversationId: string, upToMessageId: string) =>
+      send204("POST", `${conversation(conversationId)}/read`, { upToMessageId }),
   };
 }
 
 export type TeamApi = ReturnType<typeof teamApi>;
+
+const EVENT_STREAM_IDLE_MS = 70_000;
+const decodeEvent = Schema.decodeUnknownOption(TeamEvent);
+
+/**
+ * Reads `GET /v1/events` until it ends, errors, or goes quiet for longer than the server's
+ * 25 s keep-alive. EventSource cannot send the Authorization header, so this streams with fetch.
+ */
+export async function streamTeamEvents(
+  serverUrl: string,
+  token: string,
+  signal: AbortSignal,
+  handlers: { readonly onOpen: () => void; readonly onEvent: (event: TeamEvent) => void },
+): Promise<void> {
+  const idle = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const touch = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => idle.abort(), EVENT_STREAM_IDLE_MS);
+  };
+  const parse = createSseParser((data) => {
+    let json: unknown;
+    try {
+      json = JSON.parse(data);
+    } catch {
+      return;
+    }
+    const event = decodeEvent(json);
+    if (event._tag === "Some") handlers.onEvent(event.value);
+  });
+  touch();
+  const response = await fetch(`${serverUrl}/v1/events`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+    signal: AbortSignal.any([signal, idle.signal]),
+  }).catch(() => null);
+  if (response === null || !response.ok || response.body === null) {
+    clearTimeout(idleTimer);
+    throw new TeamError({
+      code:
+        response === null
+          ? "unreachable"
+          : response.status === 401
+            ? "unauthorized"
+            : "unavailable",
+      serverUrl,
+      status: response?.status ?? 0,
+    });
+  }
+  handlers.onOpen();
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  for (;;) {
+    const chunk = await reader.read().catch(() => null);
+    if (chunk === null || chunk.done) break;
+    touch();
+    parse(chunk.value);
+  }
+  clearTimeout(idleTimer);
+}

@@ -1,7 +1,7 @@
 # Account and organisations
 
 An account is optional. Everything in T3 Code works without one. Sign in only if you want to join
-an organisation: a group of people who work together.
+an organisation (a group of people who work together) or to message other people.
 
 Accounts and organisations live on a separate Team server, not on your T3 Code server. To run one
 locally, use `vp run dev:team`.
@@ -44,3 +44,19 @@ the section it was sent from.
 Owners can turn on **Auto-join** for a work domain from their verified emails. Anyone with a
 verified email at that domain joins as a member without an invitation. Public providers such as
 gmail.com can't be claimed.
+
+## Messages
+
+Once you're signed in, **Messages** appears in the sidebar footer. It sends direct messages
+between two people who have T3 Code accounts. You don't need an organisation.
+
+Choose **New message**, search for someone by name or GitHub login (at least two characters), and
+pick them. Enter sends, Shift+Enter adds a line. A message that fails to send stays in the
+conversation with **Retry** and **Discard**.
+
+When someone writes to you and you're not looking at that conversation, T3 Code notifies you the
+way it does for thread updates: a toast while the app is focused, a desktop notification
+otherwise. Both follow your notification settings. A number on the Messages icon counts unread
+messages, and a conversation is marked read when you open it.
+
+Deleting your account removes your conversations and messages.

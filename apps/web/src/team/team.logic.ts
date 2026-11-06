@@ -155,7 +155,9 @@ export function teamErrorMessage(code: TeamClientErrorCode, serverUrl: string): 
     case "not-configured":
       return "GitHub sign-in isn't set up on this Team server yet.";
     case "rate-limited":
-      return "Too many attempts. Wait a few minutes and try again.";
+      return "Too many requests. Wait a moment and try again.";
+    case "not-allowed":
+      return "You can't message that person.";
     case "domain-not-allowed":
       return "That domain can't be used for auto-join. Use a work email verified on your GitHub account.";
     case "last-owner":
