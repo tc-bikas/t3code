@@ -28,7 +28,7 @@ export interface EventStreamOut {
 }
 
 export interface Route {
-  readonly method: "GET" | "POST" | "PATCH" | "DELETE";
+  readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   readonly path: string;
   readonly handle: (req: TeamRequest) => Promise<Reply>;
 }

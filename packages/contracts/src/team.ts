@@ -198,13 +198,36 @@ export const TeamPerson = Schema.Struct({
 });
 export type TeamPerson = typeof TeamPerson.Type;
 
+export const TEAM_EMOJI_MAX_LENGTH = 16;
+
+/** What a reply quotes; the original may be gone, in which case `deleted` is true and `body` is empty. */
+export const TeamReplyPreview = Schema.Struct({
+  id: Schema.String,
+  senderId: Schema.String,
+  body: Schema.String,
+  deleted: Schema.Boolean,
+});
+export type TeamReplyPreview = typeof TeamReplyPreview.Type;
+
+export const TeamReaction = Schema.Struct({
+  emoji: Schema.String,
+  /** Everyone who reacted with this emoji, in the order they did. */
+  userIds: Schema.Array(Schema.String),
+});
+export type TeamReaction = typeof TeamReaction.Type;
+
 export const TeamMessage = Schema.Struct({
   /** Increases with send order across the service; compare as numbers, page with it as a cursor. */
   id: Schema.String,
   conversationId: Schema.String,
   senderId: Schema.String,
+  /** Markdown. Empty once the message is deleted. */
   body: Schema.String,
   createdAt: Schema.String,
+  editedAt: Schema.NullOr(Schema.String),
+  deleted: Schema.Boolean,
+  replyTo: Schema.NullOr(TeamReplyPreview),
+  reactions: Schema.Array(TeamReaction),
 });
 export type TeamMessage = typeof TeamMessage.Type;
 
@@ -236,10 +259,25 @@ export const TeamMessagesResult = Schema.Struct({
 });
 export type TeamMessagesResult = typeof TeamMessagesResult.Type;
 
+const MessageBody = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(TEAM_MESSAGE_MAX_LENGTH),
+);
+
 export const TeamSendMessageInput = Schema.Struct({
-  body: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(TEAM_MESSAGE_MAX_LENGTH)),
+  body: MessageBody,
+  /** A message of the same conversation to quote. */
+  replyToId: Schema.optional(Schema.String),
 });
 export type TeamSendMessageInput = typeof TeamSendMessageInput.Type;
+
+export const TeamEditMessageInput = Schema.Struct({ body: MessageBody });
+export type TeamEditMessageInput = typeof TeamEditMessageInput.Type;
+
+export const TeamReactionInput = Schema.Struct({
+  emoji: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(TEAM_EMOJI_MAX_LENGTH)),
+});
+export type TeamReactionInput = typeof TeamReactionInput.Type;
 
 export const TeamMarkReadInput = Schema.Struct({ upToMessageId: Schema.String });
 export type TeamMarkReadInput = typeof TeamMarkReadInput.Type;
@@ -250,6 +288,12 @@ export const TeamEvent = Schema.Union([
     type: Schema.Literal("message"),
     message: TeamMessage,
     /** The conversation from the receiving person's side, with its unread count after this message. */
+    conversation: TeamConversation,
+  }),
+  /** A message was edited, deleted, or its reactions changed; carries its full new state. */
+  Schema.Struct({
+    type: Schema.Literal("message-updated"),
+    message: TeamMessage,
     conversation: TeamConversation,
   }),
   Schema.Struct({ type: Schema.Literal("read"), conversationId: Schema.String }),

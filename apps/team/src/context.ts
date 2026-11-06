@@ -19,6 +19,7 @@ export interface TeamContext {
   readonly afterMessage?:
     | ((info: {
         readonly conversationId: string;
+        readonly messageId: string;
         readonly senderId: string;
         readonly recipientId: string;
       }) => void)

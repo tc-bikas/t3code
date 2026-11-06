@@ -916,13 +916,24 @@ describe("direct messages", () => {
         token: ann.token,
         body: { body: "hello" },
       });
+      expect(replies).toHaveLength(2);
+      for (const run of replies.splice(0)) await run();
+      const page = async () =>
+        (
+          (
+            await t.call("GET", `/v1/conversations/${conversation.id}/messages`, {
+              token: ann.token,
+            })
+          ).json as TeamMessagesResult
+        ).messages;
+      const history = await page();
+      expect(history.map((m) => m.senderId)).toEqual([ann.id, found[0]?.id]);
+      expect(history[0]?.reactions).toEqual([{ emoji: "👍", userIds: [found[0]?.id] }]);
+
+      await t.send(ann.token, conversation.id, "again");
       expect(replies).toHaveLength(1);
       await replies[0]?.();
-      const history = (
-        await t.call("GET", `/v1/conversations/${conversation.id}/messages`, { token: ann.token })
-      ).json as TeamMessagesResult;
-      expect(history.messages.map((m) => m.senderId)).toEqual([ann.id, found[0]?.id]);
-      expect(replies).toHaveLength(1);
+      expect((await page()).at(-2)?.reactions).toEqual([]);
     });
   });
 
@@ -1107,6 +1118,277 @@ describe("direct messages", () => {
       });
       expect(bobStream.events().at(-1)).toEqual({ type: "read", conversationId: conversation.id });
       expect(annPhone.events()).toHaveLength(1);
+    });
+  });
+
+  const thread = async (t: Awaited<ReturnType<typeof createHarness>>) => {
+    const { ann, bob, cat } = await people(t);
+    const { conversation } = await t.startDm(ann.token, bob.id);
+    const path = (messageId?: string, rest = "") =>
+      `/v1/conversations/${conversation.id}/messages${messageId ? `/${messageId}` : ""}${rest}`;
+    const act = async (method: string, token: string, url: string, body?: unknown) => {
+      const reply = await t.call(method, url, { token, body });
+      return { ...reply, message: reply.json as TeamMessage };
+    };
+    const react = (token: string, messageId: string, emoji: string) =>
+      act("PUT", token, path(messageId, "/reactions"), { emoji });
+    const unreact = (token: string, messageId: string, emoji: string) =>
+      act("DELETE", token, path(messageId, `/reactions/${encodeURIComponent(emoji)}`));
+    const history = async (token: string) =>
+      (
+        (await t.call("GET", `/v1/conversations/${conversation.id}/messages`, { token }))
+          .json as TeamMessagesResult
+      ).messages;
+    const unread = async (token: string) =>
+      ((await t.call("GET", "/v1/conversations", { token })).json as TeamConversationsResult)
+        .conversations[0];
+    return { ann, bob, cat, conversation, path, act, react, unreact, history, unread };
+  };
+
+  it("replies to messages of the same conversation with a preview resolved at read time", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, conversation, path, act, history, unread } = await thread(t);
+      const dan = await t.account("dan@x.test");
+      const other = await t.startDm(ann.token, dan.id);
+      const foreign = (await t.send(ann.token, other.conversation.id, "elsewhere")).message;
+      t.advance(1000);
+      const original = (await t.send(ann.token, conversation.id, "x".repeat(300))).message;
+      const reply = await act("POST", bob.token, path(), { body: "ok", replyToId: original.id });
+      expect(reply.message.replyTo).toEqual({
+        id: original.id,
+        senderId: ann.id,
+        body: "x".repeat(200),
+        deleted: false,
+      });
+      expect(original.replyTo).toBeNull();
+
+      for (const replyToId of [foreign.id, "999999", "abc"]) {
+        const bad = await act("POST", bob.token, path(), { body: "no", replyToId });
+        expect([bad.status, errorCode(bad)]).toEqual([400, "invalid-input"]);
+      }
+
+      await act("PATCH", ann.token, path(original.id), { body: "edited" });
+      expect((await history(bob.token)).at(-1)?.replyTo?.body).toBe("edited");
+      expect((await unread(ann.token))?.lastMessage?.replyTo?.body).toBe("edited");
+
+      await act("DELETE", ann.token, path(original.id));
+      expect((await history(bob.token)).at(-1)?.replyTo).toEqual({
+        id: original.id,
+        senderId: ann.id,
+        body: "",
+        deleted: true,
+      });
+    });
+  });
+
+  it("edits only the sender's own live messages and tells both people", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, cat, conversation, path, act, unread } = await thread(t);
+      const annStream = await t.openEvents(ann.token);
+      const bobStream = await t.openEvents(bob.token);
+      const first = (await t.send(ann.token, conversation.id, "first")).message;
+      await t.send(ann.token, conversation.id, "second");
+      t.advance(5000);
+      const edited = await act("PATCH", ann.token, path(first.id), { body: "  fixed " });
+      expect(edited.message).toMatchObject({
+        body: "fixed",
+        editedAt: "2030-01-01T00:00:05.000Z",
+        deleted: false,
+      });
+      expect((await unread(bob.token))?.unreadCount).toBe(2);
+
+      const forAnn = annStream.events()[2];
+      const forBob = bobStream.events()[2];
+      expect(forAnn).toMatchObject({ type: "message-updated", message: edited.message });
+      if (forAnn?.type !== "message-updated" || forBob?.type !== "message-updated") {
+        throw new Error("no update");
+      }
+      expect([forAnn.conversation.unreadCount, forBob.conversation.unreadCount]).toEqual([0, 2]);
+
+      const code = (r: { status: number; json: unknown }) => [r.status, errorCode(r)];
+      expect(code(await act("PATCH", bob.token, path(first.id), { body: "mine" }))).toEqual([
+        403,
+        "forbidden",
+      ]);
+      expect(code(await act("PATCH", cat.token, path(first.id), { body: "mine" }))).toEqual([
+        404,
+        "not-found",
+      ]);
+      expect(code(await act("PATCH", ann.token, path("999999"), { body: "x" }))).toEqual([
+        404,
+        "not-found",
+      ]);
+      expect((await act("PATCH", ann.token, path(first.id), { body: "  " })).status).toBe(400);
+      expect(
+        (await act("PATCH", ann.token, path(first.id), { body: "x".repeat(4001) })).status,
+      ).toBe(400);
+      await act("DELETE", ann.token, path(first.id));
+      expect(code(await act("PATCH", ann.token, path(first.id), { body: "back" }))).toEqual([
+        400,
+        "invalid-input",
+      ]);
+    });
+  });
+
+  it("soft deletes once, drops reactions and stops counting as unread", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, cat, conversation, path, act, react, history, unread } = await thread(t);
+      const bobStream = await t.openEvents(bob.token);
+      const first = (await t.send(ann.token, conversation.id, "oops")).message;
+      await t.send(ann.token, conversation.id, "keep");
+      await react(bob.token, first.id, "👍");
+      expect((await unread(bob.token))?.unreadCount).toBe(2);
+
+      const deleted = await act("DELETE", ann.token, path(first.id));
+      expect(deleted.message).toMatchObject({ body: "", deleted: true, reactions: [] });
+      expect((await unread(bob.token))?.unreadCount).toBe(1);
+      expect((await history(bob.token))[0]).toMatchObject({ body: "", deleted: true });
+      const before = bobStream.events().length;
+      expect((await act("DELETE", ann.token, path(first.id))).message).toEqual(deleted.message);
+      expect(bobStream.events()).toHaveLength(before);
+      expect(await t.db.query("SELECT 1 FROM message_reactions")).toEqual([]);
+
+      const last = (await t.send(ann.token, conversation.id, "last")).message;
+      await act("DELETE", ann.token, path(last.id));
+      expect((await unread(bob.token))?.lastMessage).toMatchObject({ id: last.id, deleted: true });
+      expect((await unread(bob.token))?.unreadCount).toBe(1);
+
+      expect((await act("DELETE", bob.token, path(first.id))).status).toBe(403);
+      expect((await act("DELETE", cat.token, path(first.id))).status).toBe(404);
+    });
+  });
+
+  it("adds and removes reactions per person, in order, without touching unread", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, cat, conversation, react, unreact, history, unread, path } =
+        await thread(t);
+      const annStream = await t.openEvents(ann.token);
+      const bobStream = await t.openEvents(bob.token);
+      const message = (await t.send(ann.token, conversation.id, "hi")).message;
+      await t.call("POST", `/v1/conversations/${conversation.id}/read`, {
+        token: bob.token,
+        body: { upToMessageId: message.id },
+      });
+      const sentEvents = annStream.events().length;
+
+      expect((await react(bob.token, message.id, "👍")).message.reactions).toEqual([
+        { emoji: "👍", userIds: [bob.id] },
+      ]);
+      await react(bob.token, message.id, "👍");
+      await react(ann.token, message.id, "🎉");
+      const both = await react(ann.token, message.id, "👍");
+      expect(both.message.reactions).toEqual([
+        { emoji: "👍", userIds: [bob.id, ann.id] },
+        { emoji: "🎉", userIds: [ann.id] },
+      ]);
+      expect((await history(bob.token))[0]?.reactions).toEqual(both.message.reactions);
+      expect((await unread(ann.token))?.lastMessage?.reactions).toEqual(both.message.reactions);
+      expect([
+        (await unread(ann.token))?.unreadCount,
+        (await unread(bob.token))?.unreadCount,
+      ]).toEqual([0, 0]);
+
+      const updates = annStream.events().slice(sentEvents);
+      expect(updates.map((e) => e.type)).toEqual(Array(3).fill("message-updated"));
+      expect(bobStream.events().filter((e) => e.type === "message-updated")).toHaveLength(3);
+
+      const removed = await unreact(ann.token, message.id, "👍");
+      expect(removed.message.reactions).toEqual([
+        { emoji: "👍", userIds: [bob.id] },
+        { emoji: "🎉", userIds: [ann.id] },
+      ]);
+      const count = annStream.events().length;
+      await unreact(ann.token, message.id, "👍");
+      await unreact(ann.token, message.id, "🤔");
+      expect(annStream.events()).toHaveLength(count);
+
+      expect((await react(cat.token, message.id, "👍")).status).toBe(404);
+      expect((await unreact(cat.token, message.id, "👍")).status).toBe(404);
+      expect((await react(bob.token, "999999", "👍")).status).toBe(404);
+      const malformed = await t.call("DELETE", path(message.id, "/reactions/%E0%A4%A"), {
+        token: bob.token,
+      });
+      expect(malformed.status).toBe(404);
+    });
+  });
+
+  it("accepts emoji sequences and rejects text, whitespace and too many different reactions", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, conversation, react, unreact } = await thread(t);
+      const message = (await t.send(ann.token, conversation.id, "hi")).message;
+      const accepted = ["👍", "👍🏽", "👨‍👩‍👧‍👦", "🏳️‍🌈", "🇳🇱", "1️⃣", "#⃣", "❤", "🏴󠁧󠁢󠁥󠁮󠁧󠁿"];
+      for (const emoji of accepted) {
+        expect([emoji, (await react(bob.token, message.id, emoji)).status]).toEqual([emoji, 200]);
+      }
+      for (const emoji of [
+        "",
+        "a",
+        "1",
+        "👍 ",
+        " 👍",
+        "👍\n",
+        "👍\t👍",
+        "👍\u0000",
+        "👍".repeat(9),
+      ]) {
+        const reply = await react(ann.token, message.id, emoji);
+        expect([emoji, reply.status, errorCode(reply)]).toEqual([emoji, 400, "invalid-input"]);
+      }
+      expect((await unreact(bob.token, message.id, "👍🏽")).message.reactions).toHaveLength(
+        accepted.length - 1,
+      );
+
+      const other = (await t.send(ann.token, conversation.id, "cap")).message;
+      for (let i = 0; i < 20; i++) {
+        const emoji = String.fromCodePoint(0x1f600 + i);
+        expect((await react(bob.token, other.id, emoji)).status).toBe(200);
+      }
+      const over = await react(bob.token, other.id, "🙈");
+      expect([over.status, errorCode(over)]).toEqual([400, "invalid-input"]);
+      expect((await react(ann.token, other.id, String.fromCodePoint(0x1f600))).status).toBe(200);
+    });
+  });
+
+  it("refuses reactions to a deleted message", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, conversation, path, act, react } = await thread(t);
+      const message = (await t.send(ann.token, conversation.id, "gone")).message;
+      await act("DELETE", ann.token, path(message.id));
+      const reply = await react(bob.token, message.id, "👍");
+      expect([reply.status, errorCode(reply)]).toEqual([400, "invalid-input"]);
+    });
+  });
+
+  it("limits editing like sending and reactions to 60 a minute per user", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, conversation, path, act, react } = await thread(t);
+      const message = (await t.send(ann.token, conversation.id, "m")).message;
+      for (let i = 0; i < 29; i++) {
+        expect((await act("PATCH", ann.token, path(message.id), { body: `e${i}` })).status).toBe(
+          200,
+        );
+      }
+      const limited = await act("PATCH", ann.token, path(message.id), { body: "late" });
+      expect([limited.status, errorCode(limited)]).toEqual([429, "rate-limited"]);
+
+      for (let i = 0; i < 60; i++) {
+        expect((await react(bob.token, message.id, i % 2 ? "👍" : "🎉")).status).toBe(200);
+      }
+      const tooMany = await react(bob.token, message.id, "👍");
+      expect([tooMany.status, errorCode(tooMany)]).toEqual([429, "rate-limited"]);
+      t.advance(61 * 1000);
+      expect((await react(bob.token, message.id, "👍")).status).toBe(200);
+    });
+  });
+
+  it("deletes accounts that have replies and reactions", async () => {
+    await withTeam(async (t) => {
+      const { ann, bob, conversation, path, act, react } = await thread(t);
+      const message = (await t.send(ann.token, conversation.id, "hi")).message;
+      await act("POST", bob.token, path(), { body: "re", replyToId: message.id });
+      await react(bob.token, message.id, "👍");
+      expect((await t.call("DELETE", "/v1/me", { token: ann.token })).status).toBe(204);
+      expect(await t.db.query("SELECT 1 FROM message_reactions")).toEqual([]);
     });
   });
 

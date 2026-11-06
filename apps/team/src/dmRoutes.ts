@@ -1,5 +1,7 @@
 import {
+  TeamEditMessageInput,
   TeamMarkReadInput,
+  TeamReactionInput,
   TeamSendMessageInput,
   TeamStartConversationInput,
   type TeamConversationsResult,
@@ -8,9 +10,13 @@ import {
 import { openEventStream } from "./events.ts";
 import { decodeBody, noContent, ok, param, requireAuth, type Route } from "./http.ts";
 import {
+  addReaction,
+  deleteMessage,
+  editMessage,
   listConversations,
   listMessages,
   markRead,
+  removeReaction,
   searchUsers,
   sendMessage,
   startConversation,
@@ -67,7 +73,53 @@ export const dmRoutes: ReadonlyArray<Route> = [
     async handle(req) {
       const { user } = await requireAuth(req);
       const input = decodeBody(TeamSendMessageInput, req.body);
-      return ok(await sendMessage(req.ctx, user, param(req, "id"), input.body));
+      return ok(await sendMessage(req.ctx, user, param(req, "id"), input.body, input.replyToId));
+    },
+  },
+  {
+    method: "PATCH",
+    path: "/v1/conversations/:id/messages/:messageId",
+    async handle(req) {
+      const { user } = await requireAuth(req);
+      const input = decodeBody(TeamEditMessageInput, req.body);
+      return ok(
+        await editMessage(req.ctx, user, param(req, "id"), param(req, "messageId"), input.body),
+      );
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/v1/conversations/:id/messages/:messageId",
+    async handle(req) {
+      const { user } = await requireAuth(req);
+      return ok(await deleteMessage(req.ctx, user, param(req, "id"), param(req, "messageId")));
+    },
+  },
+  {
+    method: "PUT",
+    path: "/v1/conversations/:id/messages/:messageId/reactions",
+    async handle(req) {
+      const { user } = await requireAuth(req);
+      const input = decodeBody(TeamReactionInput, req.body);
+      return ok(
+        await addReaction(req.ctx, user, param(req, "id"), param(req, "messageId"), input.emoji),
+      );
+    },
+  },
+  {
+    method: "DELETE",
+    path: "/v1/conversations/:id/messages/:messageId/reactions/:emoji",
+    async handle(req) {
+      const { user } = await requireAuth(req);
+      return ok(
+        await removeReaction(
+          req.ctx,
+          user,
+          param(req, "id"),
+          param(req, "messageId"),
+          param(req, "emoji"),
+        ),
+      );
     },
   },
   {

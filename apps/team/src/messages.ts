@@ -1,4 +1,5 @@
 import {
+  TEAM_EMOJI_MAX_LENGTH,
   TEAM_MESSAGE_MAX_LENGTH,
   type TeamConversation,
   type TeamMessage,
@@ -11,6 +12,9 @@ import { TeamError } from "./errors.ts";
 import { consume } from "./rateLimit.ts";
 
 const SEND_LIMIT = { limit: 30, windowMs: 60 * 1000 };
+const REACTION_LIMIT = { limit: 60, windowMs: 60 * 1000 };
+const REPLY_PREVIEW_MAX_LENGTH = 200;
+const MAX_EMOJIS_PER_MESSAGE = 20;
 const SEARCH_MAX_RESULTS = 10;
 const DEFAULT_PAGE = 50;
 const MAX_PAGE = 100;
@@ -39,18 +43,81 @@ interface MessageRow {
   sender_id: string;
   body: string;
   created_at: Date | string;
+  edited_at: Date | string | null;
+  deleted_at: Date | string | null;
+  reply_id: string | null;
+  reply_sender_id: string | null;
+  reply_body: string | null;
+  reply_deleted_at: Date | string | null;
 }
 
-const MESSAGE_COLUMNS =
-  "id::text AS id, conversation_id::text AS conversation_id, sender_id, body, created_at";
+/** Messages with their quoted original joined in, so previews cost no extra query. */
+const MESSAGE_SELECT = `
+  SELECT m.id::text AS id, m.conversation_id::text AS conversation_id, m.sender_id, m.body,
+         m.created_at, m.edited_at, m.deleted_at,
+         r.id::text AS reply_id, r.sender_id AS reply_sender_id, r.body AS reply_body,
+         r.deleted_at AS reply_deleted_at
+    FROM messages m LEFT JOIN messages r ON r.id = m.reply_to_id`;
 
-const toMessage = (row: MessageRow): TeamMessage => ({
-  id: row.id,
-  conversationId: row.conversation_id,
-  senderId: row.sender_id,
-  body: row.body,
-  createdAt: iso(row.created_at),
-});
+/** Reactions of many messages in one query, in the order they were made. */
+async function loadReactions(
+  q: Queryable,
+  messageIds: ReadonlyArray<string>,
+): Promise<Map<string, Array<{ emoji: string; userIds: string[] }>>> {
+  const byMessage = new Map<string, Array<{ emoji: string; userIds: string[] }>>();
+  if (messageIds.length === 0) return byMessage;
+  const rows = await q.query<{ message_id: string; user_id: string; emoji: string }>(
+    `SELECT message_id::text AS message_id, user_id, emoji FROM message_reactions
+      WHERE message_id = ANY($1::bigint[]) ORDER BY seq`,
+    [messageIds],
+  );
+  for (const row of rows) {
+    const reactions = byMessage.get(row.message_id) ?? [];
+    byMessage.set(row.message_id, reactions);
+    const existing = reactions.find((reaction) => reaction.emoji === row.emoji);
+    if (existing) existing.userIds.push(row.user_id);
+    else reactions.push({ emoji: row.emoji, userIds: [row.user_id] });
+  }
+  return byMessage;
+}
+
+async function hydrate(q: Queryable, rows: ReadonlyArray<MessageRow>): Promise<TeamMessage[]> {
+  const reactions = await loadReactions(
+    q,
+    rows.filter((row) => row.deleted_at === null).map((row) => row.id),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    conversationId: row.conversation_id,
+    senderId: row.sender_id,
+    body: row.deleted_at === null ? row.body : "",
+    createdAt: iso(row.created_at),
+    editedAt: row.edited_at === null ? null : iso(row.edited_at),
+    deleted: row.deleted_at !== null,
+    replyTo:
+      row.reply_id !== null && row.reply_sender_id !== null
+        ? {
+            id: row.reply_id,
+            senderId: row.reply_sender_id,
+            body:
+              row.reply_deleted_at === null
+                ? (row.reply_body ?? "").slice(0, REPLY_PREVIEW_MAX_LENGTH)
+                : "",
+            deleted: row.reply_deleted_at !== null,
+          }
+        : null,
+    reactions: reactions.get(row.id) ?? [],
+  }));
+}
+
+async function loadMessages(
+  q: Queryable,
+  ids: ReadonlyArray<string>,
+): Promise<Map<string, TeamMessage>> {
+  if (ids.length === 0) return new Map();
+  const rows = await q.query<MessageRow>(`${MESSAGE_SELECT} WHERE m.id = ANY($1::bigint[])`, [ids]);
+  return new Map((await hydrate(q, rows)).map((message) => [message.id, message]));
+}
 
 export async function searchUsers(
   ctx: TeamContext,
@@ -82,41 +149,29 @@ async function conversationsFor(
       updated_at: Date | string;
       unread: number;
       m_id: string | null;
-      m_sender_id: string | null;
-      m_body: string | null;
-      m_created_at: Date | string | null;
     }
   >(
     `SELECT c.id::text AS conversation_id, c.updated_at,
-            p.id, p.name, p.github_login, p.avatar_url,
-            m.id::text AS m_id, m.sender_id AS m_sender_id, m.body AS m_body, m.created_at AS m_created_at,
+            p.id, p.name, p.github_login, p.avatar_url, m.id::text AS m_id,
             (SELECT count(*)::int FROM messages x
-              WHERE x.conversation_id = c.id AND x.sender_id <> $1
+              WHERE x.conversation_id = c.id AND x.sender_id <> $1 AND x.deleted_at IS NULL
                 AND x.id > COALESCE((SELECT r.last_read_message_id FROM conversation_reads r
                                       WHERE r.conversation_id = c.id AND r.user_id = $1), 0)) AS unread
        FROM conversations c
        JOIN users p ON p.id = CASE WHEN c.user_a = $1 THEN c.user_b ELSE c.user_a END
-       LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) m ON true
+       LEFT JOIN LATERAL (SELECT id FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) m ON true
       WHERE (c.user_a = $1 OR c.user_b = $1) AND ($2::uuid IS NULL OR c.id = $2::uuid)
       ORDER BY c.updated_at DESC, c.id`,
     [userId, conversationId ?? null],
   );
+  const last = await loadMessages(
+    q,
+    rows.flatMap((row) => (row.m_id === null ? [] : [row.m_id])),
+  );
   return rows.map((row) => ({
     id: row.conversation_id,
     peer: toPerson(row),
-    lastMessage:
-      row.m_id !== null &&
-      row.m_sender_id !== null &&
-      row.m_body !== null &&
-      row.m_created_at !== null
-        ? toMessage({
-            id: row.m_id,
-            conversation_id: row.conversation_id,
-            sender_id: row.m_sender_id,
-            body: row.m_body,
-            created_at: row.m_created_at,
-          })
-        : null,
+    lastMessage: row.m_id === null ? null : (last.get(row.m_id) ?? null),
     unreadCount: row.unread,
     updatedAt: iso(row.updated_at),
   }));
@@ -180,15 +235,24 @@ export async function listMessages(
     throw new TeamError("invalid-input", `limit must be between 1 and ${MAX_PAGE}.`);
   }
   const rows = await ctx.db.query<MessageRow>(
-    `SELECT ${MESSAGE_COLUMNS} FROM messages
-      WHERE conversation_id = $1::uuid AND ($2::bigint IS NULL OR id < $2::bigint)
-      ORDER BY id DESC LIMIT ${limit + 1}`,
+    `${MESSAGE_SELECT}
+      WHERE m.conversation_id = $1::uuid AND ($2::bigint IS NULL OR m.id < $2::bigint)
+      ORDER BY m.id DESC LIMIT ${limit + 1}`,
     [conversationId, before],
   );
   return {
-    messages: rows.slice(0, limit).reverse().map(toMessage),
+    messages: await hydrate(ctx.db, rows.slice(0, limit).reverse()),
     hasMore: rows.length > limit,
   };
+}
+
+function cleanBody(rawBody: string): string {
+  const body = rawBody.trim();
+  if (!body) throw new TeamError("invalid-input", "A message cannot be empty.");
+  if (body.length > TEAM_MESSAGE_MAX_LENGTH) {
+    throw new TeamError("invalid-input", "That message is too long.");
+  }
+  return body;
 }
 
 export async function sendMessage(
@@ -196,33 +260,47 @@ export async function sendMessage(
   user: UserRow,
   conversationId: string,
   rawBody: string,
+  replyToId?: string,
 ): Promise<TeamMessage> {
   consume(ctx.limiter, `message:${user.id}`, SEND_LIMIT, "You are sending messages too quickly.");
-  const body = rawBody.trim();
-  if (!body) throw new TeamError("invalid-input", "A message cannot be empty.");
-  if (body.length > TEAM_MESSAGE_MAX_LENGTH) {
-    throw new TeamError("invalid-input", "That message is too long.");
-  }
+  const body = cleanBody(rawBody);
   const { message, peerId } = await ctx.db.transaction(async (tx) => {
     const peerId = await peerOf(tx, user.id, conversationId);
+    if (replyToId !== undefined) {
+      const quoted = MESSAGE_ID.test(replyToId)
+        ? await tx.query(
+            "SELECT 1 FROM messages WHERE id = $1::bigint AND conversation_id = $2::uuid",
+            [replyToId, conversationId],
+          )
+        : [];
+      if (quoted.length === 0) {
+        throw new TeamError("invalid-input", "replyToId must be a message of this conversation.");
+      }
+    }
     const now = nowIso(ctx);
-    const [row] = await tx.query<MessageRow>(
-      `INSERT INTO messages (conversation_id, sender_id, body, created_at)
-       VALUES ($1::uuid, $2, $3, $4) RETURNING ${MESSAGE_COLUMNS}`,
-      [conversationId, user.id, body, now],
+    const [row] = await tx.query<{ id: string }>(
+      `INSERT INTO messages (conversation_id, sender_id, body, created_at, reply_to_id)
+       VALUES ($1::uuid, $2, $3, $4, $5::bigint) RETURNING id::text AS id`,
+      [conversationId, user.id, body, now, replyToId ?? null],
     );
-    if (!row) throw new TeamError("unavailable", "Could not send the message.");
+    const message = row ? (await loadMessages(tx, [row.id])).get(row.id) : undefined;
+    if (!message) throw new TeamError("unavailable", "Could not send the message.");
     await tx.query("UPDATE conversations SET updated_at = $2 WHERE id = $1::uuid", [
       conversationId,
       now,
     ]);
-    return { message: toMessage(row), peerId };
+    return { message, peerId };
   });
   for (const recipient of [user.id, peerId]) {
     const [conversation] = await conversationsFor(ctx.db, recipient, conversationId);
     if (conversation) ctx.events.publish(recipient, { type: "message", message, conversation });
   }
-  ctx.afterMessage?.({ conversationId, senderId: user.id, recipientId: peerId });
+  ctx.afterMessage?.({
+    conversationId,
+    messageId: message.id,
+    senderId: user.id,
+    recipientId: peerId,
+  });
   return message;
 }
 
@@ -246,4 +324,152 @@ export async function markRead(
     [conversationId, user.id, upToMessageId],
   );
   if (marked.length > 0) ctx.events.publish(user.id, { type: "read", conversationId });
+}
+
+/** A pictographic, regional-indicator or keycap code point, with no whitespace or control characters. */
+const EMOJI_CONTENT = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[0-9#*]\uFE0F?\u20E3/u;
+const EMOJI_FORBIDDEN = /[\s\p{Cc}]/u;
+
+function validateEmoji(emoji: string): void {
+  if (
+    emoji.length === 0 ||
+    emoji.length > TEAM_EMOJI_MAX_LENGTH ||
+    EMOJI_FORBIDDEN.test(emoji) ||
+    !EMOJI_CONTENT.test(emoji)
+  ) {
+    throw new TeamError("invalid-input", "That is not a valid emoji.");
+  }
+}
+
+/** Runs `change` on one message of the conversation; it reports whether anything changed. */
+async function changeMessage(
+  ctx: TeamContext,
+  user: UserRow,
+  conversationId: string,
+  messageId: string,
+  change: (
+    tx: Queryable,
+    message: { sender_id: string; deleted_at: Date | string | null },
+  ) => Promise<boolean>,
+): Promise<TeamMessage> {
+  const { message, peerId, changed } = await ctx.db.transaction(async (tx) => {
+    const peerId = await peerOf(tx, user.id, conversationId);
+    if (!MESSAGE_ID.test(messageId)) throw notFound();
+    const [row] = await tx.query<{ sender_id: string; deleted_at: Date | string | null }>(
+      `SELECT sender_id, deleted_at FROM messages
+        WHERE id = $1::bigint AND conversation_id = $2::uuid FOR UPDATE`,
+      [messageId, conversationId],
+    );
+    if (!row) throw notFound();
+    const changed = await change(tx, row);
+    const message = (await loadMessages(tx, [messageId])).get(messageId);
+    if (!message) throw notFound();
+    return { message, peerId, changed };
+  });
+  if (changed) {
+    for (const recipient of [user.id, peerId]) {
+      const [conversation] = await conversationsFor(ctx.db, recipient, conversationId);
+      if (conversation) {
+        ctx.events.publish(recipient, { type: "message-updated", message, conversation });
+      }
+    }
+  }
+  return message;
+}
+
+const onlySender = (user: UserRow, message: { sender_id: string }) => {
+  if (message.sender_id !== user.id) {
+    throw new TeamError("forbidden", "You can only change your own messages.");
+  }
+};
+
+export async function editMessage(
+  ctx: TeamContext,
+  user: UserRow,
+  conversationId: string,
+  messageId: string,
+  rawBody: string,
+): Promise<TeamMessage> {
+  consume(ctx.limiter, `message:${user.id}`, SEND_LIMIT, "You are sending messages too quickly.");
+  const body = cleanBody(rawBody);
+  return changeMessage(ctx, user, conversationId, messageId, async (tx, message) => {
+    onlySender(user, message);
+    if (message.deleted_at !== null) {
+      throw new TeamError("invalid-input", "A deleted message cannot be edited.");
+    }
+    await tx.query("UPDATE messages SET body = $2, edited_at = $3 WHERE id = $1::bigint", [
+      messageId,
+      body,
+      nowIso(ctx),
+    ]);
+    return true;
+  });
+}
+
+/** Soft delete: the row stays so replies, ordering and read markers keep working. */
+export function deleteMessage(
+  ctx: TeamContext,
+  user: UserRow,
+  conversationId: string,
+  messageId: string,
+): Promise<TeamMessage> {
+  return changeMessage(ctx, user, conversationId, messageId, async (tx, message) => {
+    onlySender(user, message);
+    if (message.deleted_at !== null) return false;
+    await tx.query("UPDATE messages SET body = '', deleted_at = $2 WHERE id = $1::bigint", [
+      messageId,
+      nowIso(ctx),
+    ]);
+    await tx.query("DELETE FROM message_reactions WHERE message_id = $1::bigint", [messageId]);
+    return true;
+  });
+}
+
+export function addReaction(
+  ctx: TeamContext,
+  user: UserRow,
+  conversationId: string,
+  messageId: string,
+  emoji: string,
+): Promise<TeamMessage> {
+  consume(ctx.limiter, `reaction:${user.id}`, REACTION_LIMIT, "You are reacting too quickly.");
+  validateEmoji(emoji);
+  return changeMessage(ctx, user, conversationId, messageId, async (tx, message) => {
+    if (message.deleted_at !== null) {
+      throw new TeamError("invalid-input", "You cannot react to a deleted message.");
+    }
+    const [used] = await tx.query<{ distinct_count: number; has_emoji: boolean }>(
+      `SELECT count(DISTINCT emoji)::int AS distinct_count,
+              COALESCE(bool_or(emoji = $2), false) AS has_emoji
+         FROM message_reactions WHERE message_id = $1::bigint`,
+      [messageId, emoji],
+    );
+    if (used && !used.has_emoji && used.distinct_count >= MAX_EMOJIS_PER_MESSAGE) {
+      throw new TeamError("invalid-input", "That message has too many different reactions.");
+    }
+    const added = await tx.query(
+      `INSERT INTO message_reactions (message_id, user_id, emoji, created_at)
+       VALUES ($1::bigint, $2, $3, $4) ON CONFLICT DO NOTHING RETURNING 1`,
+      [messageId, user.id, emoji, nowIso(ctx)],
+    );
+    return added.length > 0;
+  });
+}
+
+export function removeReaction(
+  ctx: TeamContext,
+  user: UserRow,
+  conversationId: string,
+  messageId: string,
+  emoji: string,
+): Promise<TeamMessage> {
+  consume(ctx.limiter, `reaction:${user.id}`, REACTION_LIMIT, "You are reacting too quickly.");
+  return changeMessage(ctx, user, conversationId, messageId, async (tx) => {
+    const removed = await tx.query(
+      `DELETE FROM message_reactions
+        WHERE message_id = $1::bigint AND user_id = $2 AND emoji = $3 RETURNING 1`,
+      [messageId, user.id, emoji],
+    );
+    return removed.length > 0;
+  });
 }

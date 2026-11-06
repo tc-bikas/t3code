@@ -26,7 +26,7 @@ const ROUTES: ReadonlyArray<Route> = [
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-headers": "authorization, content-type",
-  "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "access-control-max-age": "86400",
   "cache-control": "no-store",
 };
@@ -48,7 +48,11 @@ function matchPath(pattern: string, path: string): Record<string, string> | unde
     const actual = have[index] ?? "";
     if (segment.startsWith(":")) {
       if (!actual) return undefined;
-      params[segment.slice(1)] = decodeURIComponent(actual);
+      try {
+        params[segment.slice(1)] = decodeURIComponent(actual);
+      } catch {
+        return undefined;
+      }
     } else if (segment !== actual) {
       return undefined;
     }

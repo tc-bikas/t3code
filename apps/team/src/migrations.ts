@@ -146,6 +146,21 @@ const MIGRATIONS: ReadonlyArray<string> = [
     PRIMARY KEY (conversation_id, user_id)
   );
   `,
+  `
+  ALTER TABLE messages
+    ADD COLUMN reply_to_id bigint NULL REFERENCES messages(id) ON DELETE SET NULL,
+    ADD COLUMN edited_at timestamptz NULL,
+    ADD COLUMN deleted_at timestamptz NULL;
+  CREATE TABLE message_reactions (
+    message_id bigint NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    emoji text NOT NULL,
+    created_at timestamptz NOT NULL,
+    seq bigserial NOT NULL,
+    PRIMARY KEY (message_id, user_id, emoji)
+  );
+  CREATE INDEX message_reactions_message_idx ON message_reactions(message_id);
+  `,
 ];
 
 export async function migrate(db: Db): Promise<void> {

@@ -1,6 +1,6 @@
 import type { TeamContext, UserRow } from "./context.ts";
 import { nowIso } from "./context.ts";
-import { sendMessage } from "./messages.ts";
+import { addReaction, sendMessage } from "./messages.ts";
 
 const PEOPLE = [
   { id: "demo-ada", githubId: -1, login: "ada-demo", name: "Ada Demo" },
@@ -10,6 +10,7 @@ const PEOPLE = [
 ] as const;
 
 const REPLY_DELAY_MS = 1200;
+const REACTION_DELAY_MS = REPLY_DELAY_MS + 600;
 const REPLIES = [
   "Sounds good to me.",
   "Can you say more about that?",
@@ -42,7 +43,7 @@ export async function seedDemoPeople(ctx: TeamContext): Promise<ReadonlyMap<stri
   return people;
 }
 
-/** Makes the fake teammates answer, a moment later, whenever a real person writes to them. */
+/** Makes the fake teammates answer, and thumb up every second message, shortly after a real person writes to them. */
 export function demoReplies(
   ctx: TeamContext,
   people: ReadonlyMap<string, UserRow>,
@@ -50,13 +51,20 @@ export function demoReplies(
     void setTimeout(() => void fn(), ms),
 ): NonNullable<TeamContext["afterMessage"]> {
   let turn = 0;
-  return ({ conversationId, senderId, recipientId }) => {
+  return ({ conversationId, messageId, senderId, recipientId }) => {
     const bot = people.get(recipientId);
     if (!bot || people.has(senderId)) return;
-    const reply = REPLIES[turn++ % REPLIES.length] ?? "Sounds good to me.";
+    const reply = REPLIES[turn % REPLIES.length] ?? "Sounds good to me.";
+    const react = turn++ % 2 === 0;
     schedule(
       () => sendMessage(ctx, bot, conversationId, reply).catch(() => undefined),
       REPLY_DELAY_MS,
     );
+    if (react) {
+      schedule(
+        () => addReaction(ctx, bot, conversationId, messageId, "👍").catch(() => undefined),
+        REACTION_DELAY_MS,
+      );
+    }
   };
 }
