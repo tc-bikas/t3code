@@ -34,6 +34,9 @@
 Start with the [development runbook](./operations/development.md) and
 [contribution policy](../CONTRIBUTING.md).
 
+The optional accounts service is covered in [Team service](./operations/team-service.md) and its
+[design notes](./internals/team.md).
+
 Internal notes preserve architectural decisions, constraints, and implementation traps that the
 source alone does not explain. Most code changes do not need an internal documentation update. Follow the
 [documentation rules](../AGENTS.md#documentation) before adding one.

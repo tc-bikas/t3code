@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // The Team service is plain node:http with promises, not an Effect program, so the
+    // Effect-runtime diagnostics for node builtins, Date, console, fetch and native errors do not apply.
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnosticSeverity": {
+          "cryptoRandomUUID": "off",
+          "nodeBuiltinImport": "off",
+          "globalDate": "off",
+          "globalConsole": "off",
+          "globalRandom": "off",
+          "globalTimers": "off",
+          "globalFetch": "off",
+          "extendsNativeError": "off",
+          "preferSchemaTaggedError": "off"
+        }
+      }
+    ]
+  },
+  "include": ["src"]
+}

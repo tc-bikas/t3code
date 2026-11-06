@@ -1,0 +1,76 @@
+import type { Db } from "./db.ts";
+
+// Append only: a released migration never changes.
+const MIGRATIONS: ReadonlyArray<string> = [
+  `
+  CREATE TABLE users (
+    id text PRIMARY KEY,
+    email text NOT NULL UNIQUE,
+    name text NOT NULL,
+    password_hash text NOT NULL,
+    email_verified boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL
+  );
+  CREATE TABLE sessions (
+    id text PRIMARY KEY,
+    user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash text NOT NULL UNIQUE,
+    label text NOT NULL,
+    created_at timestamptz NOT NULL,
+    last_used_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL
+  );
+  CREATE INDEX sessions_user_idx ON sessions(user_id);
+  CREATE TABLE email_tokens (
+    token_hash text PRIMARY KEY,
+    user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind text NOT NULL,
+    expires_at timestamptz NOT NULL,
+    used_at timestamptz
+  );
+  CREATE INDEX email_tokens_user_idx ON email_tokens(user_id, kind);
+  CREATE TABLE organizations (
+    id text PRIMARY KEY,
+    name text NOT NULL,
+    auto_join_domain text UNIQUE,
+    created_at timestamptz NOT NULL
+  );
+  CREATE TABLE memberships (
+    org_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role text NOT NULL,
+    joined_at timestamptz NOT NULL,
+    PRIMARY KEY (org_id, user_id)
+  );
+  CREATE INDEX memberships_user_idx ON memberships(user_id);
+  CREATE TABLE invites (
+    id text PRIMARY KEY,
+    org_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    email text NOT NULL,
+    role text NOT NULL,
+    invited_by_name text NOT NULL,
+    created_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    UNIQUE (org_id, email)
+  );
+  CREATE INDEX invites_email_idx ON invites(email);
+  `,
+];
+
+export async function migrate(db: Db): Promise<void> {
+  await db.query(
+    "CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
+  );
+  await db.transaction(async (tx) => {
+    // Serialises concurrent instances starting against one database.
+    await tx.query("LOCK TABLE schema_migrations IN EXCLUSIVE MODE");
+    const applied = await tx.query<{ version: number }>("SELECT version FROM schema_migrations");
+    const done = new Set(applied.map((row) => row.version));
+    for (const [index, sql] of MIGRATIONS.entries()) {
+      const version = index + 1;
+      if (done.has(version)) continue;
+      await tx.query(sql);
+      await tx.query("INSERT INTO schema_migrations (version) VALUES ($1)", [version]);
+    }
+  });
+}
