@@ -1,28 +1,71 @@
 import type {
+  TeamAuthConfig,
   TeamAuthResult,
+  TeamGithubPollResult,
+  TeamGithubStartResult,
   TeamInviteResult,
   TeamMe,
   TeamOrganizationDetail,
   TeamSessionsResult,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
 import type * as NodeNet from "node:net";
 import { describe, expect, it } from "vite-plus/test";
 import { openPglite } from "./db.ts";
-import type { EmailSender, Mail } from "./email.ts";
+import type { GithubClient, GithubEmail, GithubProfile } from "./github.ts";
 import { migrate } from "./migrations.ts";
 import { createRateLimiter } from "./rateLimit.ts";
 import { createTeamServer, handleRequest } from "./server.ts";
 
 const MINUTE = 60 * 1000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
-const PASSWORD = "correct horse battery";
+const DAY = 24 * 60 * MINUTE;
+
+interface FakeGithubUser {
+  readonly profile: GithubProfile;
+  readonly emails: ReadonlyArray<GithubEmail>;
+}
+
+function createFakeGithub() {
+  const byCode = new Map<string, FakeGithubUser>();
+  const exchanges: Array<{
+    clientId: string;
+    clientSecret: string;
+    code: string;
+    codeVerifier: string;
+    redirectUri: string;
+  }> = [];
+  const client: GithubClient = {
+    async exchangeCode(input) {
+      exchanges.push(input);
+      if (!byCode.has(input.code)) throw new Error("bad_verification_code");
+      return `token:${input.code}`;
+    },
+    async fetchProfile(accessToken) {
+      const user = byCode.get(accessToken.replace("token:", ""));
+      if (!user) throw new Error("bad token");
+      return user.profile;
+    },
+    async fetchEmails(accessToken) {
+      const user = byCode.get(accessToken.replace("token:", ""));
+      if (!user) throw new Error("bad token");
+      return user.emails;
+    },
+  };
+  return { client, exchanges, byCode };
+}
+
+interface SignInOptions {
+  readonly emails?: ReadonlyArray<GithubEmail>;
+  readonly name?: string | null | undefined;
+  readonly avatarUrl?: string | null;
+  readonly deviceLabel?: string;
+}
 
 async function withTeam(
   fn: (t: Awaited<ReturnType<typeof createHarness>>) => Promise<void>,
-  options: { consoleMail?: boolean } = {},
+  options: { configured?: boolean } = {},
 ) {
-  const t = await createHarness(options.consoleMail ?? true);
+  const t = await createHarness(options.configured ?? true);
   try {
     await fn(t);
   } finally {
@@ -30,53 +73,77 @@ async function withTeam(
   }
 }
 
-async function createHarness(consoleMail: boolean) {
+async function createHarness(configured: boolean) {
   const db = await openPglite();
   await migrate(db);
   let clock = Date.parse("2030-01-01T00:00:00Z");
   const now = () => clock;
-  const mails: Mail[] = [];
-  const mail: EmailSender = {
-    console: consoleMail,
-    async send(message) {
-      mails.push(message);
-    },
+  const fake = createFakeGithub();
+  const ctx = {
+    db,
+    github: configured
+      ? { clientId: "client-id", clientSecret: "client-secret", client: fake.client }
+      : undefined,
+    limiter: createRateLimiter(now),
+    now,
+    publicUrl: "http://team.test",
   };
-  const ctx = { db, mail, limiter: createRateLimiter(now), now, publicUrl: "http://team.test" };
 
   const call = async (
     method: string,
     url: string,
-    options: { body?: unknown; token?: string; ip?: string; raw?: string } = {},
+    options: { body?: unknown; token?: string; ip?: string } = {},
   ) => {
     const reply = await handleRequest(ctx, {
       method,
       url,
       authorization: options.token ? `Bearer ${options.token}` : undefined,
-      body: options.raw ?? (options.body === undefined ? "" : JSON.stringify(options.body)),
+      body: options.body === undefined ? "" : JSON.stringify(options.body),
       ip: options.ip ?? "10.0.0.1",
     });
     return { status: reply.status, json: reply.json, html: reply.html };
   };
 
-  const signup = async (email: string, name = "Test User", deviceLabel?: string) => {
-    const reply = await call("POST", "/v1/auth/signup", {
-      body: { email, password: PASSWORD, name, deviceLabel },
-    });
+  const start = async (deviceLabel?: string) => {
+    const reply = await call("POST", "/v1/auth/github/start", { body: { deviceLabel } });
     expect(reply.status).toBe(200);
-    return reply.json as TeamAuthResult;
+    return reply.json as TeamGithubStartResult;
+  };
+  const poll = async (state: string) =>
+    (await call("GET", `/v1/auth/github/poll?state=${state}`)).json as TeamGithubPollResult;
+
+  const githubIds = new Map<string, number>();
+  const githubUser = (login: string, options: SignInOptions): FakeGithubUser => {
+    if (!githubIds.has(login)) githubIds.set(login, githubIds.size + 1000);
+    return {
+      profile: {
+        id: githubIds.get(login) ?? 0,
+        login,
+        name: options.name === undefined ? login : options.name,
+        avatarUrl: options.avatarUrl ?? null,
+      },
+      emails: options.emails ?? [],
+    };
   };
 
-  const followLink = (link: string | undefined) => {
-    const url = new URL(link ?? "http://invalid");
-    return call("GET", url.pathname + url.search);
+  /** Runs start, the GitHub callback for `login`, and the poll; returns the final poll result. */
+  const signInAs = async (login: string, options: SignInOptions = {}) => {
+    const { state } = await start(options.deviceLabel);
+    const code = `code-${state.slice(0, 8)}`;
+    fake.byCode.set(code, githubUser(login, options));
+    const page = await call("GET", `/auth/github/callback?code=${code}&state=${state}`);
+    return { state, page, result: await poll(state) };
   };
 
-  /** A signed-in account with a confirmed email. */
-  const account = async (email: string, name = "Test User") => {
-    const auth = await signup(email, name);
-    expect((await followLink(auth.devLink)).status).toBe(200);
-    return { token: auth.token, id: auth.user.id, email };
+  /** A signed-in account whose only verified GitHub email is `email` (the login derives from it). */
+  const account = async (email: string, name?: string) => {
+    const login = email.replace(/[@.]/g, "-");
+    const { result } = await signInAs(login, {
+      name,
+      emails: [{ email, primary: true, verified: true }],
+    });
+    if (result.status !== "complete") throw new Error("sign-in did not complete");
+    return { token: result.auth.token, id: result.auth.user.id, email, login };
   };
 
   const me = async (token: string) => (await call("GET", "/v1/me", { token })).json as TeamMe;
@@ -92,7 +159,7 @@ async function createHarness(consoleMail: boolean) {
     return { ...reply, result: reply.json as TeamInviteResult };
   };
 
-  /** Invites `email`, creates their account and has them accept. */
+  /** Invites `email`, signs that person in and has them accept. */
   const join = async (owner: string, orgId: string, email: string, role = "member") => {
     const person = await account(email);
     await invite(owner, orgId, email, role);
@@ -106,10 +173,11 @@ async function createHarness(consoleMail: boolean) {
 
   return {
     db,
-    mails,
+    fake,
     call,
-    signup,
-    followLink,
+    start,
+    poll,
+    signInAs,
     account,
     me,
     createOrg,
@@ -124,35 +192,191 @@ async function createHarness(consoleMail: boolean) {
 const errorCode = (reply: { json: unknown }) =>
   (reply.json as { error: { code: string } }).error.code;
 
-describe("accounts and sessions", () => {
-  it("signs up, signs in, reads the profile and signs out", async () => {
+describe("GitHub sign-in", () => {
+  it("runs start, callback and poll, handing the session out once", async () => {
     await withTeam(async (t) => {
-      const created = await t.signup("Ada@Example.com", "Ada", "T3 Code on macOS");
-      expect(created.user).toMatchObject({ email: "ada@example.com", emailVerified: false });
-      const duplicate = await t.call("POST", "/v1/auth/signup", {
-        body: { email: "ADA@example.com", password: PASSWORD, name: "Again" },
+      const started = await t.start("T3 Code on macOS");
+      expect(started.state).toMatch(/^[0-9a-f]{64}$/);
+      const url = new URL(started.authorizeUrl);
+      expect(`${url.origin}${url.pathname}`).toBe("https://github.com/login/oauth/authorize");
+      expect(Object.fromEntries(url.searchParams)).toMatchObject({
+        client_id: "client-id",
+        redirect_uri: "http://team.test/auth/github/callback",
+        scope: "read:user user:email",
+        state: started.state,
+        code_challenge_method: "S256",
       });
-      expect([duplicate.status, errorCode(duplicate)]).toEqual([409, "email-taken"]);
+      expect(await t.poll(started.state)).toEqual({ status: "pending" });
 
-      const login = await t.call("POST", "/v1/auth/login", {
-        body: { email: "ada@example.com", password: PASSWORD, deviceLabel: "Phone" },
+      t.fake.byCode.set("the-code", {
+        profile: { id: 7, login: "ada", name: "Ada Lovelace", avatarUrl: "https://a/ada.png" },
+        emails: [
+          { email: "Ada@Acme.test", primary: true, verified: true },
+          { email: "unverified@x.test", primary: false, verified: false },
+        ],
       });
-      const { token } = login.json as TeamAuthResult;
-      expect((await t.me(token)).user.name).toBe("Ada");
+      const page = await t.call(
+        "GET",
+        `/auth/github/callback?code=the-code&state=${started.state}`,
+      );
+      expect(page.status).toBe(200);
+      expect(page.html).toContain("You&#39;re signed in. You can close this tab");
+      expect(page.html).not.toMatch(/token/i);
 
-      const sessions = (await t.call("GET", "/v1/me/sessions", { token }))
-        .json as TeamSessionsResult;
-      expect(sessions.sessions.map((s) => [s.label, s.current]).sort()).toEqual([
-        ["Phone", true],
-        ["T3 Code on macOS", false],
-      ]);
-      const stored = await t.db.query<{ token_hash: string }>("SELECT token_hash FROM sessions");
-      expect(stored.every((row) => row.token_hash !== token && row.token_hash.length === 64)).toBe(
-        true,
+      const exchange = t.fake.exchanges[0];
+      expect(exchange).toMatchObject({
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        code: "the-code",
+        redirectUri: "http://team.test/auth/github/callback",
+      });
+      expect(url.searchParams.get("code_challenge")).toBe(
+        NodeCrypto.createHash("sha256")
+          .update(exchange?.codeVerifier ?? "")
+          .digest("base64url"),
       );
 
-      expect((await t.call("POST", "/v1/auth/logout", { token })).status).toBe(204);
-      expect((await t.call("GET", "/v1/me", { token })).status).toBe(401);
+      const first = await t.poll(started.state);
+      expect(first.status).toBe("complete");
+      const auth = (first as { auth: TeamAuthResult }).auth;
+      expect(auth.user).toMatchObject({
+        githubLogin: "ada",
+        name: "Ada Lovelace",
+        avatarUrl: "https://a/ada.png",
+        email: "ada@acme.test",
+      });
+      expect(await t.poll(started.state)).toMatchObject({ status: "failed" });
+
+      const stored = await t.db.query<{ token_hash: string }>("SELECT token_hash FROM sessions");
+      expect(
+        stored.every((row) => row.token_hash !== auth.token && row.token_hash.length === 64),
+      ).toBe(true);
+      const profile = await t.me(auth.token);
+      expect(profile.verifiedEmails).toEqual(["ada@acme.test"]);
+      const sessions = (await t.call("GET", "/v1/me/sessions", { token: auth.token }))
+        .json as TeamSessionsResult;
+      expect(sessions.sessions.map((s) => [s.label, s.current])).toEqual([
+        ["T3 Code on macOS", true],
+      ]);
+
+      expect((await t.call("POST", "/v1/auth/logout", { token: auth.token })).status).toBe(204);
+      expect((await t.call("GET", "/v1/me", { token: auth.token })).status).toBe(401);
+    });
+  });
+
+  it("reports GitHub sign-in as not configured", async () => {
+    await withTeam(
+      async (t) => {
+        const config = await t.call("GET", "/v1/auth/config");
+        expect(config.json as TeamAuthConfig).toEqual({ githubConfigured: false });
+        const started = await t.call("POST", "/v1/auth/github/start", { body: {} });
+        expect([started.status, errorCode(started)]).toEqual([503, "not-configured"]);
+      },
+      { configured: false },
+    );
+    await withTeam(async (t) => {
+      expect((await t.call("GET", "/v1/auth/config")).json).toEqual({ githubConfigured: true });
+    });
+  });
+
+  it("fails the attempt when access is denied or the code exchange fails", async () => {
+    await withTeam(async (t) => {
+      const denied = await t.start();
+      const page = await t.call(
+        "GET",
+        `/auth/github/callback?error=access_denied&state=${denied.state}`,
+      );
+      expect(page.status).toBe(400);
+      expect(await t.poll(denied.state)).toEqual({
+        status: "failed",
+        message: "GitHub access was denied, so you were not signed in.",
+      });
+      expect(await t.poll(denied.state)).toMatchObject({ status: "failed" });
+
+      const broken = await t.start();
+      const bad = await t.call("GET", `/auth/github/callback?code=unknown&state=${broken.state}`);
+      expect(bad.status).toBe(400);
+      expect(await t.poll(broken.state)).toMatchObject({ status: "failed" });
+      expect(await t.db.query("SELECT 1 FROM users")).toHaveLength(0);
+    });
+  });
+
+  it("rejects unknown, expired and reused attempts", async () => {
+    await withTeam(async (t) => {
+      const unknown = await t.call("GET", "/auth/github/callback?code=x&state=nope");
+      expect(unknown.status).toBe(400);
+      expect(await t.poll("nope")).toMatchObject({ status: "failed" });
+
+      const stale = await t.start();
+      t.advance(11 * MINUTE);
+      const late = await t.call("GET", `/auth/github/callback?code=x&state=${stale.state}`);
+      expect(late.status).toBe(400);
+      expect(await t.poll(stale.state)).toMatchObject({ status: "failed" });
+      expect(await t.db.query("SELECT 1 FROM github_sign_ins")).toHaveLength(0);
+
+      const { state, result } = await t.signInAs("ada");
+      expect(result.status).toBe("complete");
+      const replay = await t.call("GET", `/auth/github/callback?code=other&state=${state}`);
+      expect(replay.status).toBe(400);
+      expect(t.fake.exchanges).toHaveLength(1);
+
+      const expiring = await t.start();
+      t.fake.byCode.set("c", {
+        profile: { id: 1, login: "x", name: null, avatarUrl: null },
+        emails: [],
+      });
+      await t.call("GET", `/auth/github/callback?code=c&state=${expiring.state}`);
+      t.advance(11 * MINUTE);
+      expect(await t.poll(expiring.state)).toMatchObject({ status: "failed" });
+    });
+  });
+
+  it("limits starts per IP", async () => {
+    await withTeam(async (t) => {
+      for (let i = 0; i < 20; i++) await t.start();
+      const refused = await t.call("POST", "/v1/auth/github/start", { body: {} });
+      expect(refused.status).toBe(503);
+      const other = await t.call("POST", "/v1/auth/github/start", { body: {}, ip: "10.0.0.2" });
+      expect(other.status).toBe(200);
+      t.advance(11 * MINUTE);
+      expect((await t.call("POST", "/v1/auth/github/start", { body: {} })).status).toBe(200);
+    });
+  });
+
+  it("refreshes the profile and replaces the emails on repeat sign-in", async () => {
+    await withTeam(async (t) => {
+      const first = await t.signInAs("ada", {
+        name: "Ada",
+        avatarUrl: "https://a/1.png",
+        emails: [
+          { email: "ada@old.test", primary: true, verified: true },
+          { email: "ada@gmail.com", primary: false, verified: true },
+        ],
+      });
+      const firstAuth = (first.result as { auth: TeamAuthResult }).auth;
+      const third = await t.signInAs("ada", {
+        avatarUrl: null,
+        name: null,
+        emails: [{ email: "ada@new.test", primary: false, verified: true }],
+      });
+      const thirdAuth = (third.result as { auth: TeamAuthResult }).auth;
+      expect(thirdAuth.user.id).toBe(firstAuth.user.id);
+      expect(thirdAuth.user).toMatchObject({ name: "ada", avatarUrl: null, email: null });
+      expect((await t.me(thirdAuth.token)).verifiedEmails).toEqual(["ada@new.test"]);
+      expect(await t.db.query("SELECT 1 FROM users")).toHaveLength(1);
+      expect(await t.db.query("SELECT 1 FROM sessions")).toHaveLength(2);
+    });
+  });
+
+  it("keeps sessions alive for 30 days from last use", async () => {
+    await withTeam(async (t) => {
+      const ada = await t.account("ada@example.com");
+      t.advance(20 * DAY);
+      expect((await t.call("GET", "/v1/me", { token: ada.token })).status).toBe(200);
+      t.advance(20 * DAY);
+      expect((await t.call("GET", "/v1/me", { token: ada.token })).status).toBe(200);
+      t.advance(31 * DAY);
+      expect((await t.call("GET", "/v1/me", { token: ada.token })).status).toBe(401);
     });
   });
 
@@ -164,51 +388,10 @@ describe("accounts and sessions", () => {
     });
   });
 
-  it("answers a wrong password and an unknown email identically", async () => {
-    await withTeam(async (t) => {
-      await t.signup("ada@example.com");
-      const wrong = await t.call("POST", "/v1/auth/login", {
-        body: { email: "ada@example.com", password: "not the password" },
-      });
-      const unknown = await t.call("POST", "/v1/auth/login", {
-        body: { email: "nobody@example.com", password: "not the password" },
-      });
-      expect(wrong).toEqual(unknown);
-      expect([wrong.status, errorCode(wrong)]).toEqual([401, "invalid-credentials"]);
-    });
-  });
-
-  it("rejects weak passwords beyond the length check", async () => {
-    await withTeam(async (t) => {
-      for (const password of ["password123", "ada.lovelace", "aaaaaaaaaaaa"]) {
-        const reply = await t.call("POST", "/v1/auth/signup", {
-          body: { email: "ada.lovelace@example.com", password, name: "Ada" },
-        });
-        expect([reply.status, errorCode(reply)]).toEqual([400, "weak-password"]);
-      }
-      const short = await t.call("POST", "/v1/auth/signup", {
-        body: { email: "ada@example.com", password: "short", name: "Ada" },
-      });
-      expect(errorCode(short)).toBe("invalid-input");
-    });
-  });
-
-  it("keeps sessions alive for 30 days from last use", async () => {
-    await withTeam(async (t) => {
-      const ada = await t.signup("ada@example.com");
-      t.advance(20 * DAY);
-      expect((await t.call("GET", "/v1/me", { token: ada.token })).status).toBe(200);
-      t.advance(20 * DAY);
-      expect((await t.call("GET", "/v1/me", { token: ada.token })).status).toBe(200);
-      t.advance(31 * DAY);
-      expect((await t.call("GET", "/v1/me", { token: ada.token })).status).toBe(401);
-    });
-  });
-
   it("throttles lastUsedAt updates and lets a user revoke only their own sessions", async () => {
     await withTeam(async (t) => {
-      const ada = await t.signup("ada@example.com");
-      const bob = await t.signup("bob@example.com");
+      const ada = await t.account("ada@example.com");
+      const bob = await t.account("bob@example.com");
       const lastUsed = async () =>
         (await t.db.query<{ last_used_at: Date }>("SELECT last_used_at FROM sessions"))
           .map((row) => row.last_used_at.getTime())
@@ -233,124 +416,17 @@ describe("accounts and sessions", () => {
       expect((await t.call("GET", "/v1/me", { token: bob.token })).status).toBe(401);
     });
   });
-
-  it("changes the password and ends only the other sessions", async () => {
-    await withTeam(async (t) => {
-      const first = await t.signup("ada@example.com");
-      const login = await t.call("POST", "/v1/auth/login", {
-        body: { email: "ada@example.com", password: PASSWORD },
-      });
-      const second = (login.json as TeamAuthResult).token;
-      const wrong = await t.call("POST", "/v1/me/password", {
-        token: second,
-        body: { currentPassword: "nope", newPassword: "a brand new passphrase" },
-      });
-      expect(errorCode(wrong)).toBe("invalid-credentials");
-      const changed = await t.call("POST", "/v1/me/password", {
-        token: second,
-        body: { currentPassword: PASSWORD, newPassword: "a brand new passphrase" },
-      });
-      expect(changed.status).toBe(204);
-      expect((await t.call("GET", "/v1/me", { token: first.token })).status).toBe(401);
-      expect((await t.call("GET", "/v1/me", { token: second })).status).toBe(200);
-      const relogin = await t.call("POST", "/v1/auth/login", {
-        body: { email: "ada@example.com", password: "a brand new passphrase" },
-      });
-      expect(relogin.status).toBe(200);
-    });
-  });
-});
-
-describe("email links", () => {
-  it("verifies an email once and not after it expires", async () => {
-    await withTeam(async (t) => {
-      const ada = await t.signup("ada@example.com");
-      expect(t.mails.at(-1)?.text).toContain("/verify-email?token=");
-      const first = await t.followLink(ada.devLink);
-      expect(first.status).toBe(200);
-      expect((await t.me(ada.token)).user.emailVerified).toBe(true);
-      expect((await t.followLink(ada.devLink)).status).toBe(400);
-
-      const bob = await t.signup("bob@example.com");
-      t.advance(25 * HOUR);
-      expect((await t.followLink(bob.devLink)).status).toBe(400);
-      const resent = await t.call("POST", "/v1/auth/resend-verification", { token: bob.token });
-      expect((await t.followLink((resent.json as TeamAuthResult).devLink)).status).toBe(200);
-    });
-  });
-
-  it("resets a password once, within an hour, and signs out every session", async () => {
-    await withTeam(async (t) => {
-      const ada = await t.signup("ada@example.com");
-      const forgot = await t.call("POST", "/v1/auth/forgot-password", {
-        body: { email: "ada@example.com" },
-      });
-      const link = new URL((forgot.json as { devLink: string }).devLink);
-      const token = link.searchParams.get("token") ?? "";
-      expect((await t.call("GET", link.pathname + link.search)).html).toContain('name="password"');
-
-      const weak = await t.call("POST", "/reset-password", {
-        raw: new URLSearchParams({ token, password: "password123" }).toString(),
-      });
-      expect(weak.status).toBe(400);
-      expect(weak.html).toContain('name="password"');
-
-      const reset = await t.call("POST", "/reset-password", {
-        raw: new URLSearchParams({ token, password: "a brand new passphrase" }).toString(),
-      });
-      expect(reset.status).toBe(200);
-      expect((await t.call("GET", "/v1/me", { token: ada.token })).status).toBe(401);
-      const again = await t.call("POST", "/reset-password", {
-        raw: new URLSearchParams({ token, password: "another new passphrase" }).toString(),
-      });
-      expect(again.status).toBe(400);
-
-      const second = await t.call("POST", "/v1/auth/forgot-password", {
-        body: { email: "ada@example.com" },
-      });
-      t.advance(61 * MINUTE);
-      const stale = new URL((second.json as { devLink: string }).devLink);
-      expect((await t.call("GET", stale.pathname + stale.search)).status).toBe(400);
-    });
-  });
-
-  it("does not reveal whether an email has an account", async () => {
-    await withTeam(async (t) => {
-      await t.signup("ada@example.com");
-      t.mails.length = 0;
-      const unknown = await t.call("POST", "/v1/auth/forgot-password", {
-        body: { email: "nobody@example.com" },
-      });
-      expect([unknown.status, unknown.json]).toEqual([200, {}]);
-      expect(t.mails).toHaveLength(0);
-    });
-    await withTeam(
-      async (t) => {
-        const ada = await t.signup("ada@example.com");
-        const forgot = await t.call("POST", "/v1/auth/forgot-password", {
-          body: { email: "ada@example.com" },
-        });
-        expect([ada.devLink, forgot.json]).toEqual([undefined, {}]);
-      },
-      { consoleMail: false },
-    );
-  });
 });
 
 describe("organisations", () => {
-  it("needs a verified email to create an organisation", async () => {
+  it("creates an organisation with the signed-in user as owner", async () => {
     await withTeam(async (t) => {
-      const ada = await t.signup("ada@example.com");
-      const refused = await t.call("POST", "/v1/orgs", {
-        token: ada.token,
-        body: { name: "Acme" },
-      });
-      expect([refused.status, errorCode(refused)]).toEqual([403, "email-not-verified"]);
-      await t.followLink(ada.devLink);
+      const ada = await t.account("ada@example.com");
       const org = await t.createOrg(ada.token);
       expect(org).toMatchObject({
         role: "owner",
         organization: { memberCount: 1, autoJoinDomain: null },
+        members: [{ githubLogin: "ada-example-com", email: "ada@example.com", role: "owner" }],
       });
       expect((await t.me(ada.token)).memberships[0]?.organization.name).toBe("Acme");
     });
@@ -449,24 +525,12 @@ describe("organisations", () => {
       const solo = await t.account("solo@solo.test");
       const soloOrg = await t.createOrg(solo.token, "Solo");
 
-      const wrong = await t.call("POST", "/v1/me/delete", {
-        token: owner.token,
-        body: { password: "nope" },
-      });
-      expect(errorCode(wrong)).toBe("invalid-credentials");
-
       const member = await t.join(owner.token, organization.id, "member@acme.test");
-      const blocked = await t.call("POST", "/v1/me/delete", {
-        token: owner.token,
-        body: { password: PASSWORD },
-      });
+      const blocked = await t.call("DELETE", "/v1/me", { token: owner.token });
       expect([blocked.status, errorCode(blocked)]).toEqual([409, "last-owner"]);
       expect((await t.call("GET", "/v1/me", { token: owner.token })).status).toBe(200);
 
-      const aloneGone = await t.call("POST", "/v1/me/delete", {
-        token: solo.token,
-        body: { password: PASSWORD },
-      });
+      const aloneGone = await t.call("DELETE", "/v1/me", { token: solo.token });
       expect(aloneGone.status).toBe(204);
       const orgs = await t.db.query<{ id: string }>("SELECT id FROM organizations WHERE id = $1", [
         soloOrg.organization.id,
@@ -478,10 +542,7 @@ describe("organisations", () => {
         token: owner.token,
         body: { role: "owner" },
       });
-      const allowed = await t.call("POST", "/v1/me/delete", {
-        token: owner.token,
-        body: { password: PASSWORD },
-      });
+      const allowed = await t.call("DELETE", "/v1/me", { token: owner.token });
       expect(allowed.status).toBe(204);
       const remaining = (
         await t.call("GET", `/v1/orgs/${organization.id}`, { token: member.token })
@@ -504,8 +565,6 @@ describe("invitations", () => {
         role: "member",
         invitedByName: "Olivia",
       });
-      expect(t.mails.at(-1)?.text).toContain("Olivia invited you to join Acme");
-      expect(t.mails.at(-1)?.text).toContain("Settings > Organisation");
 
       const replaced = await t.invite(owner.token, id, "guest@example.com", "admin");
       expect(replaced.result.invite.id).not.toBe(first.result.invite.id);
@@ -515,14 +574,7 @@ describe("invitations", () => {
         ["guest@example.com", "admin"],
       ]);
 
-      const guest = await t.signup("guest@example.com", "Guest");
-      expect((await t.me(guest.token)).invitations).toEqual([]);
-      const early = await t.call("POST", `/v1/invitations/${replaced.result.invite.id}/accept`, {
-        token: guest.token,
-      });
-      expect([early.status, errorCode(early)]).toEqual([403, "email-not-verified"]);
-      await t.followLink(guest.devLink);
-
+      const guest = await t.account("guest@example.com", "Guest");
       const [invitation] = (await t.me(guest.token)).invitations;
       expect(invitation).toMatchObject({
         organizationName: "Acme",
@@ -572,6 +624,32 @@ describe("invitations", () => {
     });
   });
 
+  it("matches any verified email and never an unverified one", async () => {
+    await withTeam(async (t) => {
+      const owner = await t.account("owner@acme.test");
+      const { organization } = await t.createOrg(owner.token);
+      const person = await t.signInAs("grace", {
+        emails: [
+          { email: "grace@home.test", primary: true, verified: true },
+          { email: "Grace@Work.test", primary: false, verified: true },
+          { email: "grace@claimed.test", primary: false, verified: false },
+        ],
+      });
+      const token = (person.result as { auth: TeamAuthResult }).auth.token;
+
+      await t.invite(owner.token, organization.id, "grace@claimed.test");
+      expect((await t.me(token)).invitations).toEqual([]);
+      const viaSecond = await t.invite(owner.token, organization.id, "GRACE@work.test");
+      const [invitation] = (await t.me(token)).invitations;
+      expect(invitation?.id).toBe(viaSecond.result.invite.id);
+      const accepted = await t.call("POST", `/v1/invitations/${invitation?.id}/accept`, { token });
+      expect(accepted.status).toBe(200);
+
+      const again = await t.invite(owner.token, organization.id, "grace@home.test");
+      expect(errorCode(again)).toBe("already-member");
+    });
+  });
+
   it("expires invitations after 14 days", async () => {
     await withTeam(async (t) => {
       const owner = await t.account("owner@acme.test");
@@ -588,36 +666,34 @@ describe("invitations", () => {
       expect([late.status, errorCode(late)]).toEqual([410, "invite-expired"]);
     });
   });
-
-  it("needs a verified inviter", async () => {
-    await withTeam(async (t) => {
-      const owner = await t.account("owner@acme.test");
-      const { organization } = await t.createOrg(owner.token);
-      await t.db.query("UPDATE users SET email_verified = false WHERE id = $1", [owner.id]);
-      const refused = await t.invite(owner.token, organization.id, "guest@example.com");
-      expect(errorCode(refused)).toBe("email-not-verified");
-    });
-  });
 });
 
 describe("auto-join domains", () => {
   it("claims only the owner's own verified, non-public, unclaimed domain", async () => {
     await withTeam(async (t) => {
-      const owner = await t.account("owner@acme.test");
-      const { organization } = await t.createOrg(owner.token);
+      const owner = await t.signInAs("owner", {
+        emails: [
+          { email: "owner@acme.test", primary: true, verified: true },
+          { email: "owner@gmail.com", primary: false, verified: true },
+        ],
+      });
+      const ownerAuth = (owner.result as { auth: TeamAuthResult }).auth;
+      const { organization } = await t.createOrg(ownerAuth.token);
       const id = organization.id;
-      const admin = await t.join(owner.token, id, "admin@acme.test", "admin");
+      const admin = await t.join(ownerAuth.token, id, "admin@acme.test", "admin");
       const patch = async (token: string, org: string, domain: string | null) =>
         t.call("PATCH", `/v1/orgs/${org}`, { token, body: { autoJoinDomain: domain } });
 
       expect((await patch(admin.token, id, "acme.test")).status).toBe(403);
       for (const domain of ["other.test", "gmail.com", "not a domain"]) {
-        expect(errorCode(await patch(owner.token, id, domain))).toBe("domain-not-allowed");
+        expect(errorCode(await patch(ownerAuth.token, id, domain))).toBe("domain-not-allowed");
       }
 
       const existing = await t.account("early@acme.test");
-      await t.signup("unverified@acme.test");
-      const set = await patch(owner.token, id, "ACME.test");
+      await t.signInAs("unverified", {
+        emails: [{ email: "unverified@acme.test", primary: true, verified: false }],
+      });
+      const set = await patch(ownerAuth.token, id, "ACME.test");
       expect((set.json as TeamOrganizationDetail).organization.autoJoinDomain).toBe("acme.test");
       const members = (set.json as TeamOrganizationDetail).members.map((m) => m.email);
       expect(members).toContain("early@acme.test");
@@ -630,14 +706,14 @@ describe("auto-join domains", () => {
         "domain-not-allowed",
       );
 
-      const off = await patch(owner.token, id, null);
+      const off = await patch(ownerAuth.token, id, null);
       expect((off.json as TeamOrganizationDetail).organization.autoJoinDomain).toBeNull();
       const late = await t.account("late@acme.test");
       expect((await t.me(late.token)).memberships.map((m) => m.organization.name)).toEqual([]);
     });
   });
 
-  it("adds people to the organisation as members when they verify", async () => {
+  it("joins people through any verified email as members, never on a public domain", async () => {
     await withTeam(async (t) => {
       const owner = await t.account("owner@acme.test");
       const { organization } = await t.createOrg(owner.token);
@@ -646,67 +722,45 @@ describe("auto-join domains", () => {
         body: { autoJoinDomain: "acme.test" },
       });
 
-      const newcomer = await t.signup("new@acme.test");
-      expect((await t.me(newcomer.token)).memberships).toEqual([]);
-      await t.followLink(newcomer.devLink);
-      const memberships = (await t.me(newcomer.token)).memberships;
+      const viaSecond = await t.signInAs("newbie", {
+        emails: [
+          { email: "newbie@gmail.com", primary: true, verified: true },
+          { email: "newbie@acme.test", primary: false, verified: true },
+        ],
+      });
+      const auth = (viaSecond.result as { auth: TeamAuthResult }).auth;
       expect(
-        memberships.map((m) => [m.organization.name, m.role, m.organization.memberCount]),
+        (await t.me(auth.token)).memberships.map((m) => [
+          m.organization.name,
+          m.role,
+          m.organization.memberCount,
+        ]),
       ).toEqual([["Acme", "member", 2]]);
-    });
-  });
-});
 
-describe("rate limiting", () => {
-  it("locks sign-in after 10 failures and clears the email's count on success", async () => {
-    await withTeam(async (t) => {
-      await t.signup("ada@example.com");
-      const login = (password: string, ip: string) =>
-        t.call("POST", "/v1/auth/login", { body: { email: "ada@example.com", password }, ip });
+      const unverified = await t.signInAs("sneaky", {
+        emails: [{ email: "sneaky@acme.test", primary: true, verified: false }],
+      });
+      const sneaky = (unverified.result as { auth: TeamAuthResult }).auth;
+      expect((await t.me(sneaky.token)).memberships).toEqual([]);
 
-      for (let i = 0; i < 4; i++) await login("wrong password", "1.1.1.1");
-      expect((await login(PASSWORD, "1.1.1.2")).status).toBe(200);
-      for (let i = 0; i < 9; i++) await login("wrong password", "1.1.1.3");
-      expect((await login(PASSWORD, "1.1.1.4")).status).toBe(200);
-
-      for (let i = 0; i < 10; i++) await login("wrong password", "1.1.1.5");
-      const locked = await login(PASSWORD, "1.1.1.6");
-      expect([locked.status, errorCode(locked)]).toEqual([429, "rate-limited"]);
-      t.advance(16 * MINUTE);
-      expect((await login(PASSWORD, "1.1.1.7")).status).toBe(200);
-    });
-  });
-
-  it("limits sign-ups per IP and reset or verification mail per address", async () => {
-    await withTeam(async (t) => {
-      const weak = (email: string, ip: string) =>
-        t.call("POST", "/v1/auth/signup", {
-          body: { email, password: "password123", name: "X" },
-          ip,
-        });
-      for (let i = 0; i < 10; i++)
-        expect((await weak(`u${i}@example.com`, "2.2.2.2")).status).toBe(400);
-      expect((await weak("u11@example.com", "2.2.2.2")).status).toBe(429);
-      expect((await weak("u11@example.com", "2.2.2.3")).status).toBe(400);
-      t.advance(61 * MINUTE);
-      expect((await weak("u12@example.com", "2.2.2.2")).status).toBe(400);
-
-      const forgot = (ip: string) =>
-        t.call("POST", "/v1/auth/forgot-password", { body: { email: "nobody@example.com" }, ip });
-      for (let i = 0; i < 5; i++) expect((await forgot(`3.3.3.${i}`)).status).toBe(200);
-      expect((await forgot("3.3.3.9")).status).toBe(429);
+      // A public provider can never be claimed, so a gmail address never joins anything.
+      await t.db.query("UPDATE organizations SET auto_join_domain = 'gmail.com' WHERE id = $1", [
+        organization.id,
+      ]);
+      const gmail = await t.account("someone@gmail.com");
+      expect((await t.me(gmail.token)).memberships).toEqual([]);
     });
   });
 });
 
 describe("http adapter", () => {
-  it("answers CORS preflights, health checks and oversized bodies", async () => {
+  it("answers CORS preflights, health checks, callback pages and oversized bodies", async () => {
     const db = await openPglite();
     await migrate(db);
     const now = () => 1_900_000_000_000;
     const server = createTeamServer({
       db,
-      mail: { console: true, send: async () => undefined },
+      github: undefined,
       limiter: createRateLimiter(now),
       now,
       publicUrl: "http://team.test",
@@ -723,11 +777,11 @@ describe("http adapter", () => {
       expect(await health.json()).toEqual({ ok: true });
       expect(health.headers.get("cache-control")).toBe("no-store");
 
-      const page = await fetch(`${base}/verify-email?token=nope`);
+      const page = await fetch(`${base}/auth/github/callback?code=x&state=nope`);
       expect(page.status).toBe(400);
       expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
 
-      const huge = await fetch(`${base}/v1/auth/login`, {
+      const huge = await fetch(`${base}/v1/auth/github/start`, {
         method: "POST",
         body: "x".repeat(70 * 1024),
       });
@@ -735,7 +789,7 @@ describe("http adapter", () => {
 
       const missing = await fetch(`${base}/v1/nope`);
       expect(missing.status).toBe(404);
-      const badJson = await fetch(`${base}/v1/auth/login`, { method: "POST", body: "{" });
+      const badJson = await fetch(`${base}/v1/auth/github/start`, { method: "POST", body: "{" });
       expect(badJson.status).toBe(400);
     } finally {
       server.closeAllConnections();

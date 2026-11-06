@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/bin.ts",
-    "start": "node src/bin.ts",
+    "dev": "node --watch --env-file-if-exists=../../.env src/bin.ts",
+    "start": "node --env-file-if-exists=../../.env src/bin.ts",
     "typecheck": "effect-tsgo tsrs --noEmit",
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },

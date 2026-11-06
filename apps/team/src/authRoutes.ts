@@ -1,33 +1,40 @@
 import {
-  TeamEmailInput,
-  TeamSignInInput,
-  TeamSignUpInput,
-  type TeamAuthResult,
+  TeamGithubStartInput,
+  type TeamAuthConfig,
+  type TeamGithubPollResult,
+  type TeamGithubStartResult,
 } from "@t3tools/contracts";
-import { forgotPassword, resendVerification, signIn, signOut, signUp } from "./accounts.ts";
 import { decodeBody, noContent, ok, requireAuth, type Route } from "./http.ts";
+import { pollGithubSignIn, signOut, startGithubSignIn } from "./signin.ts";
 
 export const authRoutes: ReadonlyArray<Route> = [
   {
-    method: "POST",
-    path: "/v1/auth/signup",
+    method: "GET",
+    path: "/v1/auth/config",
     async handle(req) {
-      const result: TeamAuthResult = await signUp(
+      const config: TeamAuthConfig = { githubConfigured: req.ctx.github !== undefined };
+      return ok(config);
+    },
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/github/start",
+    async handle(req) {
+      const result: TeamGithubStartResult = await startGithubSignIn(
         req.ctx,
-        decodeBody(TeamSignUpInput, req.body),
+        decodeBody(TeamGithubStartInput, req.body),
         req.ip,
       );
       return ok(result);
     },
   },
   {
-    method: "POST",
-    path: "/v1/auth/login",
+    method: "GET",
+    path: "/v1/auth/github/poll",
     async handle(req) {
-      const result: TeamAuthResult = await signIn(
+      const result: TeamGithubPollResult = await pollGithubSignIn(
         req.ctx,
-        decodeBody(TeamSignInInput, req.body),
-        req.ip,
+        req.query.get("state") ?? "",
       );
       return ok(result);
     },
@@ -38,20 +45,6 @@ export const authRoutes: ReadonlyArray<Route> = [
     async handle(req) {
       await signOut(req.ctx, await requireAuth(req));
       return noContent;
-    },
-  },
-  {
-    method: "POST",
-    path: "/v1/auth/resend-verification",
-    async handle(req) {
-      return ok(await resendVerification(req.ctx, await requireAuth(req), req.ip));
-    },
-  },
-  {
-    method: "POST",
-    path: "/v1/auth/forgot-password",
-    async handle(req) {
-      return ok(await forgotPassword(req.ctx, decodeBody(TeamEmailInput, req.body), req.ip));
     },
   },
 ];

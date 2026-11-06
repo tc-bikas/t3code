@@ -11,10 +11,9 @@ import type {
   TeamSetMemberRoleInput,
   TeamUpdateOrganizationInput,
 } from "@t3tools/contracts";
-import { after, iso, nowIso, sendMail, type TeamContext, type UserRow } from "./context.ts";
+import { after, iso, nowIso, type TeamContext, type UserRow } from "./context.ts";
 import { isUniqueViolation, type Queryable } from "./db.ts";
-import { emailDomain, isPublicEmailDomain, isValidDomain, normalizeEmail } from "./domains.ts";
-import { inviteMail } from "./email.ts";
+import { isPublicEmailDomain, isValidDomain, normalizeEmail } from "./domains.ts";
 import { TeamError } from "./errors.ts";
 import { DAY } from "./tokens.ts";
 
@@ -61,12 +60,6 @@ const toPendingInvite = (row: InviteRow): TeamPendingInvite => ({
 });
 
 const notFound = () => new TeamError("not-found", "Not found.");
-
-const requireVerified = (user: UserRow) => {
-  if (!user.email_verified) {
-    throw new TeamError("email-not-verified", "Confirm your email address first.");
-  }
-};
 
 const cleanName = (name: string): string => {
   const trimmed = name.trim();
@@ -117,13 +110,15 @@ async function detail(
   const members = await tx.query<{
     user_id: string;
     name: string;
-    email: string;
+    github_login: string;
+    avatar_url: string | null;
+    email: string | null;
     role: TeamRole;
     joined_at: Time;
   }>(
-    `SELECT m.user_id, u.name, u.email, m.role, m.joined_at
+    `SELECT m.user_id, u.name, u.github_login, u.avatar_url, u.email, m.role, m.joined_at
        FROM memberships m JOIN users u ON u.id = m.user_id
-      WHERE m.org_id = $1 ORDER BY m.joined_at, u.email`,
+      WHERE m.org_id = $1 ORDER BY m.joined_at, u.github_login`,
     [orgId],
   );
   const invites =
@@ -139,6 +134,8 @@ async function detail(
     members: members.map((row) => ({
       userId: row.user_id,
       name: row.name,
+      githubLogin: row.github_login,
+      avatarUrl: row.avatar_url,
       email: row.email,
       role: row.role,
       joinedAt: iso(row.joined_at),
@@ -157,14 +154,15 @@ export async function membershipsOf(userId: string, ctx: TeamContext): Promise<T
   return rows.map((row) => ({ organization: toOrganization(row), role: row.role }));
 }
 
-/** Invitations only reach a verified address: an unconfirmed claim to an email proves nothing. */
+const OWN_EMAILS = "SELECT email FROM user_emails WHERE user_id =";
+
+/** Invitations reach any email GitHub has verified for the account. */
 export async function invitationsFor(user: UserRow, ctx: TeamContext): Promise<TeamInvitation[]> {
-  if (!user.email_verified) return [];
   const rows = await ctx.db.query<InviteRow & { organization_name: string }>(
     `SELECT i.*, o.name AS organization_name
        FROM invites i JOIN organizations o ON o.id = i.org_id
-      WHERE i.email = $1 AND i.expires_at > $2 ORDER BY i.created_at`,
-    [user.email, nowIso(ctx)],
+      WHERE i.email IN (${OWN_EMAILS} $1) AND i.expires_at > $2 ORDER BY i.created_at`,
+    [user.id, nowIso(ctx)],
   );
   return rows.map((row) => ({
     id: row.id,
@@ -182,7 +180,6 @@ export async function createOrganization(
   user: UserRow,
   input: TeamCreateOrganizationInput,
 ): Promise<TeamOrganizationDetail> {
-  requireVerified(user);
   const name = cleanName(input.name);
   return ctx.db.transaction(async (tx) => {
     const id = crypto.randomUUID();
@@ -215,14 +212,17 @@ async function claimDomain(
   rawDomain: string,
 ): Promise<void> {
   const domain = rawDomain.trim().toLowerCase();
-  requireVerified(user);
   const refused = (message: string) => new TeamError("domain-not-allowed", message);
   if (!isValidDomain(domain)) throw refused("That is not a valid domain.");
   if (isPublicEmailDomain(domain)) {
     throw refused("Public email providers cannot be used for auto-join.");
   }
-  if (domain !== emailDomain(user.email)) {
-    throw refused("You can only use the domain of your own verified email address.");
+  const own = await tx.query(
+    "SELECT 1 FROM user_emails WHERE user_id = $1 AND split_part(email, '@', 2) = $2",
+    [user.id, domain],
+  );
+  if (own.length === 0) {
+    throw refused("You can only use the domain of one of your own verified GitHub emails.");
   }
   const claimed = await tx.query(
     "SELECT 1 FROM organizations WHERE auto_join_domain = $1 AND id <> $2",
@@ -238,7 +238,7 @@ async function claimDomain(
   }
   await tx.query(
     `INSERT INTO memberships (org_id, user_id, role, joined_at)
-     SELECT $1, id, 'member', $2 FROM users WHERE email_verified AND split_part(email, '@', 2) = $3
+     SELECT DISTINCT $1::text, user_id, 'member', $2::timestamptz FROM user_emails WHERE split_part(email, '@', 2) = $3
      ON CONFLICT DO NOTHING`,
     [orgId, nowIso(ctx), domain],
   );
@@ -286,12 +286,11 @@ export async function inviteMember(
   input: TeamInviteInput,
 ): Promise<TeamInviteResult> {
   const email = normalizeEmail(input.email);
-  const { invite, organizationName } = await ctx.db.transaction(async (tx) => {
+  const invite = await ctx.db.transaction(async (tx) => {
     assertRole(await roleIn(tx, orgId, user.id), ["owner", "admin"]);
-    requireVerified(user);
     const member = await tx.query(
-      `SELECT 1 FROM memberships m JOIN users u ON u.id = m.user_id
-        WHERE m.org_id = $1 AND u.email = $2`,
+      `SELECT 1 FROM memberships m JOIN user_emails e ON e.user_id = m.user_id
+        WHERE m.org_id = $1 AND e.email = $2`,
       [orgId, email],
     );
     if (member.length > 0) {
@@ -314,13 +313,9 @@ export async function inviteMember(
         after(ctx, INVITE_TTL),
       ],
     );
-    const [org] = await tx.query<{ name: string }>("SELECT name FROM organizations WHERE id = $1", [
-      orgId,
-    ]);
-    if (!row || !org) throw notFound();
-    return { invite: row, organizationName: org.name };
+    if (!row) throw notFound();
+    return row;
   });
-  await sendMail(ctx, inviteMail(email, organizationName, user.name, input.role));
   return { invite: toPendingInvite(invite) };
 }
 
@@ -390,8 +385,8 @@ export async function acceptInvitation(
   return ctx.db.transaction(async (tx) => {
     const [invite] = await tx.query<InviteRow>("SELECT * FROM invites WHERE id = $1", [inviteId]);
     if (!invite) throw notFound();
-    requireVerified(user);
-    if (invite.email !== user.email) {
+    const own = await tx.query(`${OWN_EMAILS} $1 AND email = $2`, [user.id, invite.email]);
+    if (own.length === 0) {
       throw new TeamError("forbidden", "This invitation was sent to a different email address.");
     }
     if (new Date(invite.expires_at).getTime() <= ctx.now()) {
@@ -415,11 +410,9 @@ export async function declineInvitation(
   user: UserRow,
   inviteId: string,
 ): Promise<void> {
-  const deleted = user.email_verified
-    ? await ctx.db.query("DELETE FROM invites WHERE id = $1 AND email = $2 RETURNING id", [
-        inviteId,
-        user.email,
-      ])
-    : [];
+  const deleted = await ctx.db.query(
+    `DELETE FROM invites WHERE id = $1 AND email IN (${OWN_EMAILS} $2) RETURNING id`,
+    [inviteId, user.id],
+  );
   if (deleted.length === 0) throw notFound();
 }

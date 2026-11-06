@@ -1,18 +1,6 @@
-import {
-  TeamChangePasswordInput,
-  TeamDeleteAccountInput,
-  TeamUpdateProfileInput,
-  type TeamSessionsResult,
-} from "@t3tools/contracts";
+import { TeamUpdateProfileInput, type TeamSessionsResult } from "@t3tools/contracts";
 import { decodeBody, noContent, ok, param, requireAuth, type Route } from "./http.ts";
-import {
-  changePassword,
-  deleteAccount,
-  getMe,
-  listSessions,
-  revokeSession,
-  updateProfile,
-} from "./profile.ts";
+import { deleteAccount, getMe, listSessions, revokeSession, updateProfile } from "./profile.ts";
 
 export const meRoutes: ReadonlyArray<Route> = [
   {
@@ -31,20 +19,10 @@ export const meRoutes: ReadonlyArray<Route> = [
     },
   },
   {
-    method: "POST",
-    path: "/v1/me/password",
+    method: "DELETE",
+    path: "/v1/me",
     async handle(req) {
-      const auth = await requireAuth(req);
-      await changePassword(req.ctx, auth, decodeBody(TeamChangePasswordInput, req.body));
-      return noContent;
-    },
-  },
-  {
-    method: "POST",
-    path: "/v1/me/delete",
-    async handle(req) {
-      const { user } = await requireAuth(req);
-      await deleteAccount(req.ctx, user, decodeBody(TeamDeleteAccountInput, req.body));
+      await deleteAccount(req.ctx, (await requireAuth(req)).user);
       return noContent;
     },
   },

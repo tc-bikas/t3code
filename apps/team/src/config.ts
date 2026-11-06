@@ -6,8 +6,8 @@ export interface TeamConfig {
   readonly databaseUrl: string | undefined;
   readonly dataDir: string;
   readonly publicUrl: string;
-  readonly resendApiKey: string | undefined;
-  readonly emailFrom: string | undefined;
+  /** Present only when both the client id and the secret are set. */
+  readonly github: { readonly clientId: string; readonly clientSecret: string } | undefined;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv, cwd: string): TeamConfig {
@@ -15,13 +15,14 @@ export function loadConfig(env: NodeJS.ProcessEnv, cwd: string): TeamConfig {
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`TEAM_PORT must be a port number, got "${env.TEAM_PORT}"`);
   }
+  const clientId = env.TEAM_GITHUB_CLIENT_ID;
+  const clientSecret = env.TEAM_GITHUB_CLIENT_SECRET;
   return {
     port,
     host: env.TEAM_HOST || "127.0.0.1",
     databaseUrl: env.DATABASE_URL || undefined,
     dataDir: env.TEAM_DATA_DIR || NodePath.join(cwd, ".t3-team", "pgdata"),
     publicUrl: (env.TEAM_PUBLIC_URL || "http://localhost:3790").replace(/\/+$/, ""),
-    resendApiKey: env.RESEND_API_KEY || undefined,
-    emailFrom: env.TEAM_EMAIL_FROM || undefined,
+    github: clientId && clientSecret ? { clientId, clientSecret } : undefined,
   };
 }

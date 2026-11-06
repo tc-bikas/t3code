@@ -1,22 +1,16 @@
 import * as Schema from "effect/Schema";
 
 /**
- * The Team service: optional accounts and organisations, hosted apart from any T3 server.
+ * The Team service: optional GitHub sign-in and organisations, hosted apart from any T3 server.
  * Every route lives under `/v1`, speaks JSON, and authenticates with `Authorization: Bearer <token>`.
  * Failures are `{ error: { code, message } }`.
  */
 
-const TEAM_PASSWORD_MIN_LENGTH = 10;
-const TEAM_PASSWORD_MAX_LENGTH = 200;
 const TEAM_NAME_MAX_LENGTH = 80;
 
 const Email = Schema.String.check(
   Schema.isMaxLength(254),
   Schema.isPattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/),
-);
-const Password = Schema.String.check(
-  Schema.isMinLength(TEAM_PASSWORD_MIN_LENGTH),
-  Schema.isMaxLength(TEAM_PASSWORD_MAX_LENGTH),
 );
 const DisplayName = Schema.String.check(
   Schema.isMinLength(1),
@@ -28,9 +22,11 @@ export type TeamRole = typeof TeamRole.Type;
 
 export const TeamUser = Schema.Struct({
   id: Schema.String,
-  email: Schema.String,
+  githubLogin: Schema.String,
   name: Schema.String,
-  emailVerified: Schema.Boolean,
+  avatarUrl: Schema.NullOr(Schema.String),
+  /** The primary verified GitHub email, or null when the account has none. */
+  email: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
 });
 export type TeamUser = typeof TeamUser.Type;
@@ -54,7 +50,9 @@ export type TeamMembership = typeof TeamMembership.Type;
 export const TeamMember = Schema.Struct({
   userId: Schema.String,
   name: Schema.String,
-  email: Schema.String,
+  githubLogin: Schema.String,
+  avatarUrl: Schema.NullOr(Schema.String),
+  email: Schema.NullOr(Schema.String),
   role: TeamRole,
   joinedAt: Schema.String,
 });
@@ -93,44 +91,39 @@ export const TeamSession = Schema.Struct({
 });
 export type TeamSession = typeof TeamSession.Type;
 
-/**
- * Present only when the server has no email provider and prints mail to its console instead.
- * It lets a local developer finish a flow without reading the terminal.
- */
-export const TeamDevMail = Schema.Struct({ devLink: Schema.optional(Schema.String) });
+export const TeamAuthConfig = Schema.Struct({ githubConfigured: Schema.Boolean });
+export type TeamAuthConfig = typeof TeamAuthConfig.Type;
 
 export const TeamAuthResult = Schema.Struct({
   token: Schema.String,
   expiresAt: Schema.String,
   user: TeamUser,
-  devLink: Schema.optional(Schema.String),
 });
 export type TeamAuthResult = typeof TeamAuthResult.Type;
 
-export const TeamSignUpInput = Schema.Struct({
-  email: Email,
-  password: Password,
-  name: DisplayName,
+export const TeamGithubStartInput = Schema.Struct({
   deviceLabel: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
 });
-export type TeamSignUpInput = typeof TeamSignUpInput.Type;
+export type TeamGithubStartInput = typeof TeamGithubStartInput.Type;
 
-export const TeamSignInInput = Schema.Struct({
-  email: Email,
-  password: Schema.String.check(Schema.isMaxLength(TEAM_PASSWORD_MAX_LENGTH)),
-  deviceLabel: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
+/** Open `authorizeUrl` in a browser, then poll with `state` until the sign-in completes. */
+export const TeamGithubStartResult = Schema.Struct({
+  state: Schema.String,
+  authorizeUrl: Schema.String,
 });
-export type TeamSignInInput = typeof TeamSignInInput.Type;
+export type TeamGithubStartResult = typeof TeamGithubStartResult.Type;
 
-export const TeamEmailInput = Schema.Struct({ email: Email });
-export type TeamEmailInput = typeof TeamEmailInput.Type;
-
-/** `POST /v1/auth/resend-verification` and `POST /v1/auth/forgot-password`. */
-export const TeamMailSentResult = TeamDevMail;
-export type TeamMailSentResult = typeof TeamMailSentResult.Type;
+export const TeamGithubPollResult = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("pending") }),
+  Schema.Struct({ status: Schema.Literal("complete"), auth: TeamAuthResult }),
+  Schema.Struct({ status: Schema.Literal("failed"), message: Schema.String }),
+]);
+export type TeamGithubPollResult = typeof TeamGithubPollResult.Type;
 
 export const TeamMe = Schema.Struct({
   user: TeamUser,
+  /** Every verified email on the GitHub account; invitations and auto-join match any of them. */
+  verifiedEmails: Schema.Array(Schema.String),
   memberships: Schema.Array(TeamMembership),
   invitations: Schema.Array(TeamInvitation),
 });
@@ -138,17 +131,6 @@ export type TeamMe = typeof TeamMe.Type;
 
 export const TeamUpdateProfileInput = Schema.Struct({ name: DisplayName });
 export type TeamUpdateProfileInput = typeof TeamUpdateProfileInput.Type;
-
-export const TeamChangePasswordInput = Schema.Struct({
-  currentPassword: Schema.String.check(Schema.isMaxLength(TEAM_PASSWORD_MAX_LENGTH)),
-  newPassword: Password,
-});
-export type TeamChangePasswordInput = typeof TeamChangePasswordInput.Type;
-
-export const TeamDeleteAccountInput = Schema.Struct({
-  password: Schema.String.check(Schema.isMaxLength(TEAM_PASSWORD_MAX_LENGTH)),
-});
-export type TeamDeleteAccountInput = typeof TeamDeleteAccountInput.Type;
 
 export const TeamSessionsResult = Schema.Struct({ sessions: Schema.Array(TeamSession) });
 export type TeamSessionsResult = typeof TeamSessionsResult.Type;
@@ -189,11 +171,7 @@ export const TeamErrorCode = Schema.Literals([
   "unauthorized",
   "forbidden",
   "not-found",
-  "email-taken",
-  "invalid-credentials",
-  "email-not-verified",
-  "weak-password",
-  "rate-limited",
+  "not-configured",
   "domain-not-allowed",
   "last-owner",
   "already-member",

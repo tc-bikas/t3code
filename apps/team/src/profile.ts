@@ -1,24 +1,24 @@
-import type {
-  TeamChangePasswordInput,
-  TeamDeleteAccountInput,
-  TeamMe,
-  TeamSession,
-  TeamUpdateProfileInput,
-  TeamUser,
-} from "@t3tools/contracts";
-import { confirmPassword } from "./accounts.ts";
+import type { TeamMe, TeamSession, TeamUpdateProfileInput, TeamUser } from "@t3tools/contracts";
 import { iso, toTeamUser, type TeamContext, type UserRow } from "./context.ts";
 import { TeamError } from "./errors.ts";
 import { invitationsFor, membershipsOf } from "./orgs.ts";
-import { assertStrongPassword, hashPassword } from "./passwords.ts";
 import type { Authenticated } from "./sessions.ts";
 
 export async function getMe(ctx: TeamContext, user: UserRow): Promise<TeamMe> {
-  const [memberships, invitations] = await Promise.all([
+  const [memberships, invitations, emails] = await Promise.all([
     membershipsOf(user.id, ctx),
     invitationsFor(user, ctx),
+    ctx.db.query<{ email: string }>(
+      "SELECT email FROM user_emails WHERE user_id = $1 ORDER BY is_primary DESC, email",
+      [user.id],
+    ),
   ]);
-  return { user: toTeamUser(user), memberships, invitations };
+  return {
+    user: toTeamUser(user),
+    verifiedEmails: emails.map((row) => row.email),
+    memberships,
+    invitations,
+  };
 }
 
 export async function updateProfile(
@@ -32,34 +32,8 @@ export async function updateProfile(
   return toTeamUser({ ...user, name });
 }
 
-/** Ends every other session: a changed password should lock out whoever knew the old one. */
-export async function changePassword(
-  ctx: TeamContext,
-  auth: Authenticated,
-  input: TeamChangePasswordInput,
-): Promise<void> {
-  await confirmPassword(ctx, auth.user, input.currentPassword);
-  assertStrongPassword(input.newPassword, auth.user.email);
-  const passwordHash = await hashPassword(input.newPassword);
-  await ctx.db.transaction(async (tx) => {
-    await tx.query("UPDATE users SET password_hash = $2 WHERE id = $1", [
-      auth.user.id,
-      passwordHash,
-    ]);
-    await tx.query("DELETE FROM sessions WHERE user_id = $1 AND id <> $2", [
-      auth.user.id,
-      auth.sessionId,
-    ]);
-  });
-}
-
 /** A sole owner cannot walk away from an organisation that still has people in it. */
-export async function deleteAccount(
-  ctx: TeamContext,
-  user: UserRow,
-  input: TeamDeleteAccountInput,
-): Promise<void> {
-  await confirmPassword(ctx, user, input.password);
+export async function deleteAccount(ctx: TeamContext, user: UserRow): Promise<void> {
   await ctx.db.transaction(async (tx) => {
     const orphaned = await tx.query<{ org_id: string; members: number }>(
       `SELECT m.org_id, (SELECT count(*)::int FROM memberships WHERE org_id = m.org_id) AS members
@@ -79,7 +53,10 @@ export async function deleteAccount(
     for (const org of orphaned) {
       await tx.query("DELETE FROM organizations WHERE id = $1", [org.org_id]);
     }
-    await tx.query("DELETE FROM invites WHERE email = $1", [user.email]);
+    await tx.query(
+      "DELETE FROM invites WHERE email IN (SELECT email FROM user_emails WHERE user_id = $1)",
+      [user.id],
+    );
     await tx.query("DELETE FROM users WHERE id = $1", [user.id]);
   });
 }
