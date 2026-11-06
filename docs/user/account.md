@@ -6,22 +6,20 @@ an organisation: a group of people who work together.
 Accounts and organisations live on a separate Team server, not on your T3 Code server. To run one
 locally, use `vp run dev:team`.
 
-## Sign in or create an account
+## Sign in with GitHub
 
-Open **Settings → Account**. Choose **Create account** and enter your work email, your name, and a
-password, or choose **Sign in** if you already have one. **Forgot password?** emails you a reset
-link.
+Open **Settings → Account** and choose **Sign in with GitHub**. Your browser opens GitHub; approve
+the request and come back. T3 Code finishes signing in on its own. **Cancel** stops waiting.
 
-Verify your email after you sign up. Open the link in the email, then return to **Settings →
-Account** and choose **I've verified, refresh**. Organisations need a verified email. When the Team
-server has no email provider (local development), the page shows an **Open link** button instead of
-sending a message.
+Your name, avatar, and verified emails come from GitHub. From the same page you can change your
+display name, see where you're signed in, revoke a device, sign out, or delete your account.
+Deleting it removes you from every organisation.
 
-From the same page you can change your name or password, see where you're signed in, revoke a
-device, sign out, or delete your account. Changing your password signs out your other devices.
+Your **work email** is a verified email on your GitHub account. To use another one, add and verify
+it on GitHub, then sign in again.
 
-The Team server's address is under **Advanced: Team server**. Each address keeps its own sign-in, and
-**Test connection** checks that it answers.
+The Team server's address is under **Advanced: Team server**. Each address keeps its own sign-in,
+and **Test connection** checks that it answers.
 
 ## Organisations
 
@@ -36,13 +34,13 @@ Every organisation keeps at least one owner. To step down, make someone else an 
 
 ## Invitations
 
-Owners and admins invite people by email. An invitation is matched to the invited person's verified
-email, so it appears under **Invitations** on their **Settings → Organisation** page. They choose
-**Accept** or **Decline**. No link is needed. Revoke a pending invitation from the same section it
-was sent from.
+Owners and admins invite people by email. An invitation matches any verified email on the invited
+person's GitHub account, so it appears under **Invitations** on their **Settings → Organisation**
+page. They choose **Accept** or **Decline**. No link is needed. Revoke a pending invitation from
+the section it was sent from.
 
 ## Auto-join
 
-Owners can turn on **Auto-join** so anyone who verifies an email at the owner's own work domain joins
-as a member without an invitation. Public email providers such as gmail.com can't be claimed, so
-sign in with a work email to use it.
+Owners can turn on **Auto-join** for a work domain from their verified emails. Anyone with a
+verified email at that domain joins as a member without an invitation. Public providers such as
+gmail.com can't be claimed.

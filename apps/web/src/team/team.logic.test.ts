@@ -2,17 +2,15 @@ import { TeamErrorCode } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  autoJoinEligibility,
+  autoJoinDomains,
   canChangeMemberRole,
   canRemoveMember,
   normalizeTeamServerUrl,
   organizationPermissions,
   resolveActiveOrganizationId,
   teamDeviceLabel,
-  teamEmailIssue,
   teamErrorMessage,
   teamInitials,
-  teamPasswordIssue,
 } from "./team.logic";
 
 describe("normalizeTeamServerUrl", () => {
@@ -30,33 +28,12 @@ describe("normalizeTeamServerUrl", () => {
   });
 });
 
-describe("sign-up validation", () => {
-  it("checks email shape and the contract's minimum password length", () => {
-    expect(teamEmailIssue("ada@example.com")).toBeNull();
-    expect(teamEmailIssue("ada@")).not.toBeNull();
-    expect(teamPasswordIssue("123456789")).toContain("10");
-    expect(teamPasswordIssue("1234567890")).toBeNull();
-  });
-});
-
-describe("autoJoinEligibility", () => {
-  it("blocks public providers, case-insensitively", () => {
-    expect(autoJoinEligibility({ email: "ada@Gmail.com", emailVerified: true })).toMatchObject({
-      eligible: false,
-    });
-  });
-
-  it("needs a verified email", () => {
-    expect(autoJoinEligibility({ email: "ada@acme.dev", emailVerified: false })).toMatchObject({
-      eligible: false,
-    });
-  });
-
-  it("offers the owner's own work domain", () => {
-    expect(autoJoinEligibility({ email: "ada@acme.dev", emailVerified: true })).toEqual({
-      eligible: true,
-      domain: "acme.dev",
-    });
+describe("autoJoinDomains", () => {
+  it("keeps distinct work domains and drops public providers, case-insensitively", () => {
+    expect(
+      autoJoinDomains(["ada@Gmail.com", "ada@Acme.dev", "ada.l@acme.dev", "ada@proton.me", "bad@"]),
+    ).toEqual(["acme.dev"]);
+    expect(autoJoinDomains([])).toEqual([]);
   });
 });
 

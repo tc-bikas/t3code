@@ -3,19 +3,20 @@ import type {
   TeamInvitation,
   TeamMe,
   TeamMember,
+  TeamOrganization,
   TeamOrganizationDetail,
   TeamRole,
 } from "@t3tools/contracts";
 import { useState, type ReactNode } from "react";
 
+import { TeamAvatar } from "../../team/TeamAvatar";
 import { TeamTextField } from "../../team/TeamFields";
 import {
-  autoJoinEligibility,
+  autoJoinDomains,
   canChangeMemberRole,
   canRemoveMember,
   organizationDeleteConfirmed,
   organizationPermissions,
-  teamEmailIssue,
 } from "../../team/team.logic";
 import {
   useActiveTeamMembership,
@@ -99,23 +100,7 @@ export function OrganisationSettings() {
   const { session } = account;
 
   if (session.status === "ready") {
-    return session.me.user.emailVerified ? (
-      <OrganisationHome account={account} me={session.me} />
-    ) : (
-      <SettingsPageContainer>
-        <SettingsSection title="Organisation">
-          <SettingsRow
-            title="Verify your email first"
-            description="Organisations are tied to a verified email, so invitations and auto-join can find you. Open the link in the email we sent, then refresh on the Account page."
-            control={
-              <Button size="sm" render={<Link to="/settings/account" />}>
-                Go to Account
-              </Button>
-            }
-          />
-        </SettingsSection>
-      </SettingsPageContainer>
-    );
+    return <OrganisationHome account={account} me={session.me} />;
   }
 
   return (
@@ -392,9 +377,6 @@ function OrganisationDetail({
   const [deleting, setDeleting] = useState(false);
   const memberTask = useTeamTask(account.serverUrl);
   const inviteTask = useTeamTask(account.serverUrl);
-  const autoJoinTask = useTeamTask(account.serverUrl);
-  const autoJoin = autoJoinEligibility(me.user);
-  const autoJoinOn = organization.autoJoinDomain !== null;
 
   return (
     <>
@@ -412,36 +394,13 @@ function OrganisationDetail({
           description={`${organization.memberCount} ${organization.memberCount === 1 ? "member" : "members"}`}
           control={<RoleBadge role={role} />}
         />
-        {permissions.canManageAutoJoin || autoJoinOn ? (
-          <SettingsRow
-            id="organisation-auto-join"
-            title="Auto-join"
-            description={
-              autoJoinOn
-                ? `Anyone who verifies an @${organization.autoJoinDomain} email joins as a member.`
-                : autoJoin.eligible
-                  ? `Let anyone who verifies an @${autoJoin.domain} email join as a member, without an invitation.`
-                  : autoJoin.reason
-            }
-            status={<FormError message={autoJoinTask.error} />}
-            control={
-              permissions.canManageAutoJoin ? (
-                <Switch
-                  checked={autoJoinOn}
-                  disabled={autoJoinTask.pending || (!autoJoinOn && !autoJoin.eligible)}
-                  aria-label="Auto-join"
-                  onCheckedChange={(checked) =>
-                    void autoJoinTask.run(
-                      () =>
-                        account.api.updateOrganization(organization.id, {
-                          autoJoinDomain: checked && autoJoin.eligible ? autoJoin.domain : null,
-                        }),
-                      onChanged,
-                    )
-                  }
-                />
-              ) : null
-            }
+        {permissions.canManageAutoJoin || organization.autoJoinDomain !== null ? (
+          <AutoJoinRow
+            account={account}
+            organization={organization}
+            domains={autoJoinDomains(me.verifiedEmails)}
+            canManage={permissions.canManageAutoJoin}
+            onChanged={onChanged}
           />
         ) : null}
       </SettingsSection>
@@ -450,8 +409,7 @@ function OrganisationDetail({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Email</TableHead>
+              <TableHead>Member</TableHead>
               <TableHead>Role</TableHead>
               <TableHead className="w-24">
                 <span className="sr-only">Actions</span>
@@ -507,7 +465,7 @@ function OrganisationDetail({
                   <RoleBadge role={invite.role} />
                 </span>
               }
-              description={`Invited ${formatRelativeTimeLabel(invite.createdAt)} by ${invite.invitedByName}. They join once they verify this email.`}
+              description={`Invited ${formatRelativeTimeLabel(invite.createdAt)} by ${invite.invitedByName}. They see it when they sign in with this email on GitHub.`}
               control={
                 <Button
                   size="sm"
@@ -578,6 +536,76 @@ function OrganisationDetail({
   );
 }
 
+function AutoJoinRow({
+  account,
+  organization,
+  domains,
+  canManage,
+  onChanged,
+}: {
+  readonly account: Account;
+  readonly organization: TeamOrganization;
+  readonly domains: ReadonlyArray<string>;
+  readonly canManage: boolean;
+  readonly onChanged: (detail?: TeamOrganizationDetail) => void;
+}) {
+  const [picked, setPicked] = useState<string | null>(null);
+  const task = useTeamTask(account.serverUrl);
+  const current = organization.autoJoinDomain;
+  const on = current !== null;
+  const domain = picked !== null && domains.includes(picked) ? picked : (domains[0] ?? null);
+  return (
+    <SettingsRow
+      id="organisation-auto-join"
+      title="Auto-join"
+      description={
+        on
+          ? `Anyone with a verified @${current} email on GitHub joins as a member.`
+          : domains.length > 0
+            ? "Let anyone with a verified work email on GitHub at this domain join as a member, without an invitation."
+            : "Add a work email to your GitHub account and verify it, then sign in again to turn on auto-join. Public providers like gmail.com can't be claimed."
+      }
+      status={<FormError message={task.error} />}
+      control={
+        canManage ? (
+          <>
+            {!on && domains.length > 1 && domain !== null ? (
+              <Select value={domain} onValueChange={setPicked}>
+                <SelectTrigger size="sm" aria-label="Auto-join domain" className="w-44 min-w-0">
+                  <SelectValue>{() => `@${domain}`}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {domains.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      @{option}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            ) : !on && domain !== null ? (
+              <span className="text-xs text-muted-foreground">@{domain}</span>
+            ) : null}
+            <Switch
+              checked={on}
+              disabled={task.pending || (!on && domain === null)}
+              aria-label="Auto-join"
+              onCheckedChange={(checked) =>
+                void task.run(
+                  () =>
+                    account.api.updateOrganization(organization.id, {
+                      autoJoinDomain: checked ? domain : null,
+                    }),
+                  onChanged,
+                )
+              }
+            />
+          </>
+        ) : null
+      }
+    />
+  );
+}
+
 function RenameForm({
   account,
   id,
@@ -639,12 +667,11 @@ function MemberRow({
     <TableRow>
       <TableCell>
         <span className="flex items-center gap-2">
+          <TeamAvatar name={member.name} avatarUrl={member.avatarUrl} size="sm" />
           <span className="truncate font-medium text-foreground">{member.name}</span>
+          <span className="truncate text-muted-foreground">@{member.githubLogin}</span>
           {isYou ? <Badge variant="outline">You</Badge> : null}
         </span>
-      </TableCell>
-      <TableCell>
-        <span className="text-muted-foreground">{member.email}</span>
       </TableCell>
       <TableCell>
         {canChangeRole ? (
@@ -689,21 +716,16 @@ function InviteForm({
 }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<TeamRole>("member");
-  const [submitted, setSubmitted] = useState(false);
-  const issue = teamEmailIssue(email);
   return (
     <form
       className="grid gap-3 px-3 py-3 sm:px-4"
       onSubmit={(event) => {
         event.preventDefault();
-        setSubmitted(true);
-        if (issue) return;
         const inviteRole = role === "admin" ? "admin" : "member";
         void task.run(
           () => account.api.invite(organizationId, { email: email.trim(), role: inviteRole }),
           () => {
             setEmail("");
-            setSubmitted(false);
             onInvited();
           },
         );
@@ -716,7 +738,7 @@ function InviteForm({
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           spellCheck={false}
-          error={submitted ? issue : null}
+          required
         />
         <RoleSelect
           value={role}

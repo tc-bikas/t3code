@@ -1,20 +1,17 @@
 import {
-  TeamAuthResult,
+  TeamAuthConfig,
   TeamErrorBody,
   TeamErrorCode,
-  TeamMailSentResult,
+  TeamGithubPollResult,
+  TeamGithubStartResult,
   TeamMe,
   TeamOrganizationDetail,
   TeamInviteResult,
   TeamSessionsResult,
   TeamUser,
-  type TeamChangePasswordInput,
   type TeamCreateOrganizationInput,
-  type TeamDeleteAccountInput,
   type TeamInviteInput,
   type TeamRole,
-  type TeamSignInInput,
-  type TeamSignUpInput,
   type TeamUpdateOrganizationInput,
   type TeamUpdateProfileInput,
 } from "@t3tools/contracts";
@@ -110,34 +107,26 @@ export function teamApi(serverUrl: string, token: string | null, onUnauthorized:
   const org = (id: string) => `/orgs/${encodeURIComponent(id)}`;
 
   return {
-    signUp: (input: TeamSignUpInput) =>
+    authConfig: () =>
+      request(serverUrl, "/auth/config", { method: "GET", token: null }, TeamAuthConfig),
+    githubStart: (deviceLabel: string) =>
       request(
         serverUrl,
-        "/auth/signup",
-        { method: "POST", token: null, body: input },
-        TeamAuthResult,
+        "/auth/github/start",
+        { method: "POST", token: null, body: { deviceLabel } },
+        TeamGithubStartResult,
       ),
-    signIn: (input: TeamSignInInput) =>
+    githubPoll: (state: string) =>
       request(
         serverUrl,
-        "/auth/login",
-        { method: "POST", token: null, body: input },
-        TeamAuthResult,
+        `/auth/github/poll?state=${encodeURIComponent(state)}`,
+        { method: "GET", token: null },
+        TeamGithubPollResult,
       ),
     signOut: () => send204("POST", "/auth/logout"),
-    resendVerification: () =>
-      write("POST", "/auth/resend-verification", undefined, TeamMailSentResult),
-    forgotPassword: (email: string) =>
-      request(
-        serverUrl,
-        "/auth/forgot-password",
-        { method: "POST", token: null, body: { email } },
-        TeamMailSentResult,
-      ),
     me: () => get("/me", TeamMe),
     updateProfile: (input: TeamUpdateProfileInput) => write("PATCH", "/me", input, TeamUser),
-    changePassword: (input: TeamChangePasswordInput) => send204("POST", "/me/password", input),
-    deleteAccount: (input: TeamDeleteAccountInput) => send204("POST", "/me/delete", input),
+    deleteAccount: () => send204("DELETE", "/me"),
     sessions: () => get("/me/sessions", TeamSessionsResult),
     revokeSession: (id: string) => send204("DELETE", `/me/sessions/${encodeURIComponent(id)}`),
     createOrganization: (input: TeamCreateOrganizationInput) =>

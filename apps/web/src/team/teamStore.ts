@@ -1,4 +1,9 @@
-import type { TeamMe, TeamOrganizationDetail, TeamSession } from "@t3tools/contracts";
+import type {
+  TeamAuthConfig,
+  TeamMe,
+  TeamOrganizationDetail,
+  TeamSession,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Atom, type AtomRegistry } from "effect/reactivity";
 
@@ -39,6 +44,11 @@ export type TeamSessionsState =
   | { readonly status: "loading" }
   | { readonly status: "failed"; readonly message: string }
   | { readonly status: "ready"; readonly sessions: ReadonlyArray<TeamSession> };
+
+export type TeamAuthConfigState =
+  | { readonly status: "loading" }
+  | { readonly status: "failed"; readonly message: string }
+  | { readonly status: "ready"; readonly config: TeamAuthConfig };
 
 const LOADING = { status: "loading" } as const;
 const SIGNED_OUT = { status: "signed-out" } as const;
@@ -187,4 +197,34 @@ export async function loadTeamSessions(
       }),
     );
   if (read === latestRead.get(`sessions:${key}`)) registry.set(teamSessionsAtom(key), next);
+}
+
+const teamAuthConfigAtom = Atom.family((serverUrl: string) =>
+  Atom.writable(
+    (get): TeamAuthConfigState => {
+      void loadTeamAuthConfig(get.registry, serverUrl);
+      return LOADING;
+    },
+    (ctx, value: TeamAuthConfigState) => ctx.setSelf(value),
+  ).pipe(Atom.withLabel(`team:auth-config:${serverUrl}`)),
+);
+
+export const teamAuthConfigAtomFor = (serverUrl: string) => teamAuthConfigAtom(serverUrl);
+
+export async function loadTeamAuthConfig(
+  registry: AtomRegistry.AtomRegistry,
+  serverUrl: string,
+): Promise<void> {
+  const key = `auth-config:${serverUrl}`;
+  const read = nextRead(key);
+  const next = await teamApi(serverUrl, null, unauthorized(serverUrl))
+    .authConfig()
+    .then(
+      (config): TeamAuthConfigState => ({ status: "ready", config }),
+      (error: unknown): TeamAuthConfigState => ({
+        status: "failed",
+        message: error instanceof Error ? error.message : "Something went wrong.",
+      }),
+    );
+  if (read === latestRead.get(key)) registry.set(teamAuthConfigAtom(serverUrl), next);
 }

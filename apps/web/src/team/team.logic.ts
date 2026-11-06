@@ -1,15 +1,8 @@
-import { TeamEmailInput, type TeamErrorCode, type TeamRole } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
+import type { TeamErrorCode, TeamRole } from "@t3tools/contracts";
 
 export const DEFAULT_TEAM_SERVER_URL = "http://localhost:3790";
 
-/** Mirrors the Team service's password rule in `packages/contracts/src/team.ts`. */
-export const TEAM_PASSWORD_MIN_LENGTH = 10;
-
 export type TeamClientErrorCode = TeamErrorCode | "unreachable" | "bad-response";
-
-const isEmailInput = Schema.is(TeamEmailInput);
-const isValidEmail = (email: string) => isEmailInput({ email });
 
 function parseUrl(input: string): URL | null {
   try {
@@ -28,22 +21,10 @@ export function normalizeTeamServerUrl(input: string): string | null {
   return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
 
-export function teamEmailIssue(email: string): string | null {
-  const trimmed = email.trim();
-  if (trimmed === "") return "Enter an email address.";
-  return isValidEmail(trimmed) ? null : "That doesn't look like an email address.";
-}
-
 export function teamNameIssue(name: string): string | null {
   const trimmed = name.trim();
   if (trimmed === "") return "Enter your name.";
   return trimmed.length > 80 ? "Use 80 characters or fewer." : null;
-}
-
-export function teamPasswordIssue(password: string): string | null {
-  return password.length < TEAM_PASSWORD_MIN_LENGTH
-    ? `Use at least ${TEAM_PASSWORD_MIN_LENGTH} characters.`
-    : null;
 }
 
 // Mirrors the backend's list of mailbox providers that cannot claim a domain.
@@ -78,30 +59,13 @@ function emailDomain(email: string): string | null {
   return at < 0 || at === email.length - 1 ? null : email.slice(at + 1).toLowerCase();
 }
 
-function isPublicEmailDomain(domain: string): boolean {
-  return PUBLIC_EMAIL_DOMAINS.has(domain.toLowerCase());
-}
-
-export type AutoJoinEligibility =
-  | { readonly eligible: true; readonly domain: string }
-  | { readonly eligible: false; readonly reason: string };
-
-export function autoJoinEligibility(user: {
-  readonly email: string;
-  readonly emailVerified: boolean;
-}): AutoJoinEligibility {
-  const domain = emailDomain(user.email);
-  if (domain === null) return { eligible: false, reason: "Your email address has no domain." };
-  if (!user.emailVerified) {
-    return { eligible: false, reason: "Verify your email to turn on auto-join." };
-  }
-  if (isPublicEmailDomain(domain)) {
-    return {
-      eligible: false,
-      reason: `${domain} is a public email provider, so it can't be claimed. Sign in with a work email to use auto-join.`,
-    };
-  }
-  return { eligible: true, domain };
+/** Work domains among a person's verified emails: the ones an owner may claim for auto-join. */
+export function autoJoinDomains(verifiedEmails: ReadonlyArray<string>): ReadonlyArray<string> {
+  const domains = verifiedEmails.flatMap((email) => {
+    const domain = emailDomain(email);
+    return domain === null || PUBLIC_EMAIL_DOMAINS.has(domain) ? [] : [domain];
+  });
+  return [...new Set(domains)];
 }
 
 export interface TeamOrganizationPermissions {
@@ -188,18 +152,10 @@ export function teamErrorMessage(code: TeamClientErrorCode, serverUrl: string): 
       return "Your role in this organisation doesn't allow that.";
     case "not-found":
       return "That no longer exists. It may have been removed.";
-    case "email-taken":
-      return "An account with that email already exists. Try signing in instead.";
-    case "invalid-credentials":
-      return "That email and password don't match.";
-    case "email-not-verified":
-      return "Verify your email first. Use the link we sent you.";
-    case "weak-password":
-      return `Choose a stronger password of at least ${TEAM_PASSWORD_MIN_LENGTH} characters.`;
-    case "rate-limited":
-      return "Too many attempts. Wait a moment and try again.";
+    case "not-configured":
+      return "GitHub sign-in isn't set up on this Team server yet.";
     case "domain-not-allowed":
-      return "That email domain can't be used for auto-join. Use your own work domain.";
+      return "That domain can't be used for auto-join. Use a work email verified on your GitHub account.";
     case "last-owner":
       return "Every organisation needs an owner. Make someone else an owner first.";
     case "already-member":

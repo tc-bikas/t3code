@@ -227,9 +227,9 @@ const SOURCE_CONTROL_HOST_TERMS = sourceControlClients.definitions
 export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "account-sign-in",
-    title: "Sign in or create an account",
+    title: "Sign in with GitHub",
     to: "/settings/account",
-    searchTerms: ["account login log in sign up register password email verify profile session"],
+    searchTerms: ["account login log in github profile session sign out delete"],
   },
   {
     id: "team-server",

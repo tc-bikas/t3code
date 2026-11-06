@@ -6,7 +6,8 @@ import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 /** Sign-in is optional, so a signed-out person only sees a quiet link and nothing is fetched. */
 export function SidebarAccountItem({ onOpen }: { readonly onOpen: () => void }) {
   const { session } = useTeamAccount();
-  const name = session.status === "ready" ? session.me.user.name : null;
+  const user = session.status === "ready" ? session.me.user : null;
+  const name = user?.name ?? null;
   if (session.status === "signed-out") {
     return (
       <SidebarMenuItem className="shrink-0">
@@ -22,7 +23,9 @@ export function SidebarAccountItem({ onOpen }: { readonly onOpen: () => void }) 
         aria-label={name === null ? "Account" : `Account: ${name}`}
         onClick={onOpen}
       >
-        {name === null ? null : <TeamAvatar name={name} size="sm" />}
+        {user === null ? null : (
+          <TeamAvatar name={user.name} avatarUrl={user.avatarUrl} size="sm" />
+        )}
         <span className="truncate">{name ?? "Account"}</span>
       </SidebarMenuButton>
     </SidebarMenuItem>

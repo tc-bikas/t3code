@@ -2,21 +2,22 @@ import { CircleCheckIcon } from "lucide-react";
 import { useState } from "react";
 import type { TeamMe } from "@t3tools/contracts";
 
-import { DevMailLink } from "../../team/DevMailLink";
-import { TeamPasswordField, TeamTextField } from "../../team/TeamFields";
 import { TeamAvatar } from "../../team/TeamAvatar";
+import { TeamTextField } from "../../team/TeamFields";
 import {
   DEFAULT_TEAM_SERVER_URL,
   normalizeTeamServerUrl,
-  teamEmailIssue,
   teamNameIssue,
-  teamPasswordIssue,
-  TEAM_PASSWORD_MIN_LENGTH,
 } from "../../team/team.logic";
 import { checkTeamServerHealth } from "../../team/teamClient";
-import { useTeamAccount, useTeamSessions, useTeamTask } from "../../team/useTeam";
+import {
+  useGithubSignIn,
+  useTeamAccount,
+  useTeamAuthConfig,
+  useTeamSessions,
+  useTeamTask,
+} from "../../team/useTeam";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -29,7 +30,6 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
-import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -45,20 +45,13 @@ export function FormError({ message }: { readonly message: string | null }) {
 
 export function AccountSettings() {
   const account = useTeamAccount();
-  const [devLink, setDevLink] = useState<string | null>(null);
   const { session, token } = account;
   return (
     <SettingsPageContainer>
       {session.status === "ready" && token !== null ? (
-        <SignedInSections
-          account={account}
-          token={token}
-          me={session.me}
-          devLink={devLink}
-          setDevLink={setDevLink}
-        />
+        <SignedInSections account={account} token={token} me={session.me} />
       ) : session.status === "signed-out" ? (
-        <SignedOutSection account={account} setDevLink={setDevLink} />
+        <SignedOutSection account={account} />
       ) : (
         <SessionStatusSection account={account} title="Account" />
       )}
@@ -109,146 +102,68 @@ export function SessionStatusSection({
   );
 }
 
-type AuthMode = "sign-in" | "sign-up";
-
-function SignedOutSection({
-  account,
-  setDevLink,
-}: {
-  readonly account: Account;
-  readonly setDevLink: (link: string | null) => void;
-}) {
-  const [mode, setMode] = useState<AuthMode>("sign-in");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [submitted, setSubmitted] = useState(false);
-  const [resetSent, setResetSent] = useState<{ email: string; devLink?: string } | null>(null);
-  const task = useTeamTask(account.serverUrl);
-
-  const emailIssue = teamEmailIssue(email);
-  const nameIssue = mode === "sign-up" ? teamNameIssue(name) : null;
-  const passwordIssue =
-    mode === "sign-up"
-      ? teamPasswordIssue(password)
-      : password === ""
-        ? "Enter your password."
-        : null;
-  const signUp = mode === "sign-up";
-
-  const submit = () => {
-    setSubmitted(true);
-    if (emailIssue || nameIssue || passwordIssue) return;
-    const base = { email: email.trim(), password, deviceLabel: account.deviceLabel };
-    void task.run(
-      () =>
-        signUp ? account.api.signUp({ ...base, name: name.trim() }) : account.api.signIn(base),
-      (result) => {
-        setDevLink(result.devLink ?? null);
-        account.storeToken(result.token);
-      },
-    );
-  };
-
-  const forgotPassword = () => {
-    setSubmitted(true);
-    if (emailIssue) return;
-    void task.run(
-      () => account.api.forgotPassword(email.trim()),
-      (result) =>
-        setResetSent({
-          email: email.trim(),
-          ...(result.devLink === undefined ? {} : { devLink: result.devLink }),
-        }),
-    );
-  };
+function SignedOutSection({ account }: { readonly account: Account }) {
+  const config = useTeamAuthConfig(account.serverUrl);
+  const github = useGithubSignIn(account);
+  const { state } = config;
+  const waiting = github.state.status === "starting" || github.state.status === "waiting";
 
   return (
     <SettingsSection id="account-sign-in" title="Account">
-      <div className="grid gap-4 px-3 py-4 sm:px-4">
-        <p className="text-xs leading-normal text-muted-foreground">
-          Signing in is optional. Everything in T3 Code works without it. An account lets you join
-          an organisation.
-        </p>
-        <ToggleGroup
-          aria-label="Sign in or create an account"
-          variant="segmented"
-          value={[mode]}
-          onValueChange={(next) => {
-            const value = next[0];
-            if (value === "sign-in" || value === "sign-up") {
-              setMode(value);
-              setSubmitted(false);
-              setResetSent(null);
-              task.clearError();
-            }
-          }}
-        >
-          <Toggle value="sign-in">Sign in</Toggle>
-          <Toggle value="sign-up">Create account</Toggle>
-        </ToggleGroup>
-        <form
-          className="grid gap-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            submit();
-          }}
-        >
-          {signUp ? (
-            <TeamTextField
-              label="Name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              autoComplete="name"
-              error={submitted ? nameIssue : null}
-            />
-          ) : null}
-          <TeamTextField
-            label={signUp ? "Work email" : "Email"}
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            autoComplete="email"
-            spellCheck={false}
-            error={submitted ? emailIssue : null}
-          />
-          <TeamPasswordField
-            label="Password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            autoComplete={signUp ? "new-password" : "current-password"}
-            hint={signUp ? `At least ${TEAM_PASSWORD_MIN_LENGTH} characters.` : undefined}
-            error={submitted ? passwordIssue : null}
-          />
-          <FormError message={task.error} />
-          <div className="flex items-center justify-between gap-3">
-            <Button type="submit" disabled={task.pending}>
-              {signUp ? "Create account" : "Sign in"}
+      {state.status === "loading" ? (
+        <SettingsRow
+          title="Checking the Team server"
+          control={<Spinner size="sm" tone="muted" aria-label="Loading" />}
+        />
+      ) : state.status === "failed" ? (
+        <SettingsRow
+          title="Can't reach the Team server"
+          description={state.message}
+          control={
+            <Button size="sm" variant="outline" onClick={() => void config.reload()}>
+              Try again
             </Button>
-            {signUp ? null : (
-              <Button
-                type="button"
-                variant="ghost-muted"
-                size="sm"
-                disabled={task.pending}
-                onClick={forgotPassword}
-              >
-                Forgot password?
+          }
+        />
+      ) : !state.config.githubConfigured ? (
+        <SettingsRow
+          title="GitHub sign-in isn't set up on this Team server yet"
+          description="See docs/operations/team-service.md."
+          control={
+            <Button size="sm" variant="outline" onClick={() => void config.reload()}>
+              Check again
+            </Button>
+          }
+        />
+      ) : (
+        <div className="grid gap-3 px-3 py-4 sm:px-4">
+          <p className="text-xs leading-normal text-muted-foreground">
+            Signing in is optional, and lets you join an organisation.
+          </p>
+          {waiting ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <Spinner size="sm" tone="muted" aria-label="Loading" />
+              <p role="status" className="text-xs text-muted-foreground">
+                Waiting for GitHub… finish signing in in your browser.
+              </p>
+              <Button size="sm" variant="outline" onClick={github.cancel}>
+                Cancel
               </Button>
-            )}
-          </div>
-        </form>
-        {resetSent ? (
-          <div className="grid gap-2">
-            <p role="status" className="text-xs text-muted-foreground">
-              If an account exists for {resetSent.email}, we've sent a link to reset the password.
-            </p>
-            {resetSent.devLink ? (
-              <DevMailLink devLink={resetSent.devLink} label="Open reset link" />
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+            </div>
+          ) : (
+            <>
+              {github.state.status === "failed" ? (
+                <FormError message={github.state.message} />
+              ) : null}
+              <div>
+                <Button onClick={() => void github.start()}>
+                  {github.state.status === "failed" ? "Try again" : "Sign in with GitHub"}
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </SettingsSection>
   );
 }
@@ -257,14 +172,10 @@ function SignedInSections({
   account,
   token,
   me,
-  devLink,
-  setDevLink,
 }: {
   readonly account: Account;
   readonly token: string;
   readonly me: TeamMe;
-  readonly devLink: string | null;
-  readonly setDevLink: (link: string | null) => void;
 }) {
   const sessions = useTeamSessions(account.serverUrl, token);
   const [deleting, setDeleting] = useState(false);
@@ -272,19 +183,16 @@ function SignedInSections({
   const revoke = useTeamTask(account.serverUrl);
   return (
     <>
-      {me.user.emailVerified ? null : (
-        <VerifyEmailBanner account={account} me={me} devLink={devLink} setDevLink={setDevLink} />
-      )}
       <SettingsSection title="Profile">
         <div className="flex items-center gap-3 px-3 py-3 sm:px-4">
-          <TeamAvatar name={me.user.name} />
+          <TeamAvatar name={me.user.name} avatarUrl={me.user.avatarUrl} />
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-medium">{me.user.name}</div>
-            <div className="truncate text-xs text-muted-foreground">{me.user.email}</div>
+            <div className="truncate text-xs text-muted-foreground">@{me.user.githubLogin}</div>
+            <div className="truncate text-xs text-muted-foreground">
+              {me.user.email ?? "No verified email"}
+            </div>
           </div>
-          <Badge variant={me.user.emailVerified ? "success" : "warning"}>
-            {me.user.emailVerified ? "Verified" : "Not verified"}
-          </Badge>
         </div>
         <EditNameForm account={account} currentName={me.user.name} />
         <SettingsRow
@@ -307,9 +215,6 @@ function SignedInSections({
             </Button>
           }
         />
-      </SettingsSection>
-      <SettingsSection title="Password">
-        <ChangePasswordForm account={account} onChanged={() => void sessions.reload()} />
       </SettingsSection>
       <SettingsSection title="Active sessions">
         {sessions.state.status === "ready" ? (
@@ -382,66 +287,6 @@ function SignedInSections({
   );
 }
 
-function VerifyEmailBanner({
-  account,
-  me,
-  devLink,
-  setDevLink,
-}: {
-  readonly account: Account;
-  readonly me: TeamMe;
-  readonly devLink: string | null;
-  readonly setDevLink: (link: string | null) => void;
-}) {
-  const [sent, setSent] = useState(false);
-  const resend = useTeamTask(account.serverUrl);
-  const refresh = useTeamTask(account.serverUrl);
-  return (
-    <div className="grid gap-2">
-      <Alert variant="warning" controlAlignment="first-line">
-        <AlertTitle>Verify your email</AlertTitle>
-        <AlertDescription>
-          Confirm {me.user.email} to join or create an organisation. Open the link in the email we
-          sent, then come back here.
-        </AlertDescription>
-        <AlertAction>
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={resend.pending}
-            onClick={() =>
-              void resend.run(
-                () => account.api.resendVerification(),
-                (result) => {
-                  setDevLink(result.devLink ?? null);
-                  setSent(true);
-                },
-              )
-            }
-          >
-            Resend email
-          </Button>
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={refresh.pending}
-            onClick={() => void refresh.run(() => account.refreshSession())}
-          >
-            I've verified, refresh
-          </Button>
-        </AlertAction>
-      </Alert>
-      {sent && devLink === null ? (
-        <p role="status" className="px-1 text-xs text-muted-foreground">
-          Verification email sent to {me.user.email}.
-        </p>
-      ) : null}
-      {devLink ? <DevMailLink devLink={devLink} label="Open verification link" /> : null}
-      <FormError message={resend.error ?? refresh.error} />
-    </div>
-  );
-}
-
 function EditNameForm({
   account,
   currentName,
@@ -484,71 +329,6 @@ function EditNameForm({
   );
 }
 
-function ChangePasswordForm({
-  account,
-  onChanged,
-}: {
-  readonly account: Account;
-  readonly onChanged: () => void;
-}) {
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [submitted, setSubmitted] = useState(false);
-  const [done, setDone] = useState(false);
-  const task = useTeamTask(account.serverUrl);
-  const currentIssue = current === "" ? "Enter your current password." : null;
-  const nextIssue = teamPasswordIssue(next);
-  return (
-    <form
-      className="grid gap-3 px-3 py-3 sm:px-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        setSubmitted(true);
-        setDone(false);
-        if (currentIssue || nextIssue) return;
-        void task.run(
-          () => account.api.changePassword({ currentPassword: current, newPassword: next }),
-          () => {
-            setCurrent("");
-            setNext("");
-            setSubmitted(false);
-            setDone(true);
-            onChanged();
-          },
-        );
-      }}
-    >
-      <TeamPasswordField
-        label="Current password"
-        value={current}
-        onChange={(event) => setCurrent(event.target.value)}
-        autoComplete="current-password"
-        error={submitted ? currentIssue : null}
-      />
-      <TeamPasswordField
-        label="New password"
-        value={next}
-        onChange={(event) => setNext(event.target.value)}
-        autoComplete="new-password"
-        hint={`At least ${TEAM_PASSWORD_MIN_LENGTH} characters. Your other devices are signed out.`}
-        error={submitted ? nextIssue : null}
-      />
-      <FormError message={task.error} />
-      {done ? (
-        <p role="status" className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <CircleCheckIcon className="size-3.5 text-success" />
-          Password changed. Your other devices were signed out.
-        </p>
-      ) : null}
-      <div>
-        <Button type="submit" size="sm" disabled={task.pending}>
-          Change password
-        </Button>
-      </div>
-    </form>
-  );
-}
-
 function DeleteAccountDialog({
   account,
   onClose,
@@ -556,7 +336,6 @@ function DeleteAccountDialog({
   readonly account: Account;
   readonly onClose: () => void;
 }) {
-  const [password, setPassword] = useState("");
   const task = useTeamTask(account.serverUrl);
   return (
     <Dialog
@@ -569,44 +348,28 @@ function DeleteAccountDialog({
         <DialogHeader>
           <DialogTitle>Delete your account?</DialogTitle>
           <DialogDescription>
-            This can't be undone. Enter your password to confirm.
+            This can't be undone. It removes you from every organisation you belong to.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
-          <form
-            id="delete-account-form"
-            className="grid gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (password === "") return;
-              void task.run(
-                () => account.api.deleteAccount({ password }),
-                () => {
-                  account.storeToken(null);
-                  onClose();
-                },
-              );
-            }}
-          >
-            <TeamPasswordField
-              label="Password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              autoFocus
-            />
-            <FormError message={task.error} />
-          </form>
+          <FormError message={task.error} />
         </DialogPanel>
         <DialogFooter variant="bare">
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
           <Button
-            type="submit"
-            form="delete-account-form"
             variant="destructive"
-            disabled={task.pending || password === ""}
+            disabled={task.pending}
+            onClick={() =>
+              void task.run(
+                () => account.api.deleteAccount(),
+                () => {
+                  account.storeToken(null);
+                  onClose();
+                },
+              )
+            }
           >
             Delete account
           </Button>
