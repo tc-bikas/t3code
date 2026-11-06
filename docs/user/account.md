@@ -52,7 +52,8 @@ between two people who have T3 Code accounts. You don't need an organisation.
 
 Choose **New message**, search for someone by name or GitHub login (at least two characters), and
 pick them. Enter sends, Shift+Enter adds a line. A message that fails to send stays in the
-conversation with **Retry** and **Discard**.
+conversation with **Retry** and **Discard**. Paste a link to share it; links open in your browser,
+and GitHub pull request links show as a compact `repo #number` chip.
 
 When someone writes to you and you're not looking at that conversation, T3 Code notifies you the
 way it does for thread updates: a toast while the app is focused, a desktop notification

@@ -1,16 +1,25 @@
 import { TEAM_MESSAGE_MAX_LENGTH, type TeamConversation } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeftIcon } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import {
   dayLabel,
   groupMessagesByDay,
-  isIncomingMessage,
   MAX_MESSAGES_PER_CONVERSATION,
   showsMessageCounter,
+  splitMessageText,
+  startsMessageRun,
+  type MessageSegment,
 } from "../../team/messages.logic";
 import {
   discardMessage,
@@ -22,34 +31,107 @@ import {
   type ThreadState,
 } from "../../team/messagesStore";
 import { TeamAvatar } from "../../team/TeamAvatar";
+import { useTeamAccount } from "../../team/useTeam";
+import { ensureLocalApi } from "../../localApi";
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
+import { ComposerSurface } from "../chat/ComposerSurface";
 import { Spinner } from "../ui/spinner";
-import { Textarea } from "../ui/textarea";
 
 const NEAR_BOTTOM_PX = 96;
 
-function Bubble({
-  own,
+const openLink = (url: string) => {
+  void ensureLocalApi().shell.openExternal(url);
+};
+
+function MessageText({ body }: { readonly body: string }) {
+  const keyed: Array<{ key: number; segment: MessageSegment }> = [];
+  let offset = 0;
+  for (const segment of splitMessageText(body)) {
+    keyed.push({ key: offset, segment });
+    offset += segment.kind === "text" ? segment.text.length : segment.url.length;
+  }
+  const parts = keyed.map(({ key, segment }) => {
+    if (segment.kind === "text") return <span key={key}>{segment.text}</span>;
+    const common = {
+      href: segment.url,
+      target: "_blank",
+      rel: "noreferrer noopener",
+      onClick: (event: MouseEvent<HTMLAnchorElement>) => {
+        event.preventDefault();
+        openLink(segment.url);
+      },
+    } as const;
+    return segment.kind === "link" ? (
+      <a
+        key={key}
+        {...common}
+        className="text-primary underline underline-offset-2 hover:text-primary/80"
+      >
+        {segment.url}
+      </a>
+    ) : (
+      <a
+        key={key}
+        {...common}
+        className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-1.5 py-0.5 align-middle text-xs text-foreground no-underline hover:bg-accent"
+      >
+        <PullRequestGlyph.pullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="truncate">
+          {segment.repository} #{segment.number}
+        </span>
+      </a>
+    );
+  });
+  return (
+    <p className="min-w-0 text-sm wrap-anywhere whitespace-pre-wrap text-foreground">{parts}</p>
+  );
+}
+
+/** Slack-style row: everyone's messages sit left, the name and avatar open each run. */
+function MessageRow({
+  author,
+  startsRun,
   time,
+  dimmed = false,
   children,
+  footer,
 }: {
-  readonly own: boolean;
+  readonly author: { readonly name: string; readonly avatarUrl: string | null };
+  readonly startsRun: boolean;
   readonly time: string;
+  readonly dimmed?: boolean;
   readonly children: string;
+  readonly footer?: ReactNode;
 }) {
   return (
-    <div className={cn("flex flex-col gap-0.5", own ? "items-end" : "items-start")}>
-      <p
-        className={cn(
-          "max-w-[min(36rem,85%)] rounded-2xl px-3 py-1.5 text-sm wrap-anywhere whitespace-pre-wrap",
-          own ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground",
+    <div
+      className={cn(
+        "group/message flex gap-3 px-4 py-0.5 hover:bg-accent/40",
+        startsRun && "mt-2 pt-1",
+      )}
+    >
+      <div className="w-10 shrink-0">
+        {startsRun ? (
+          <TeamAvatar name={author.name} avatarUrl={author.avatarUrl} />
+        ) : (
+          <span className="hidden pt-1 text-right text-3xs text-muted-foreground tabular-nums group-hover/message:block">
+            {time}
+          </span>
         )}
-      >
-        {children}
-      </p>
-      <span className="px-1 text-3xs text-muted-foreground">{time}</span>
+      </div>
+      <div className={cn("flex min-w-0 flex-1 flex-col", dimmed && "opacity-64")}>
+        {startsRun ? (
+          <div className="flex items-baseline gap-2">
+            <span className="truncate text-sm font-semibold">{author.name}</span>
+            <span className="text-xs text-muted-foreground">{time}</span>
+          </div>
+        ) : null}
+        <MessageText body={children} />
+        {footer}
+      </div>
     </div>
   );
 }
@@ -78,21 +160,46 @@ function Composer({
     send();
   };
   return (
-    <div className="flex flex-col gap-1 border-t border-border p-3">
-      <div className="flex items-end gap-2">
-        <Textarea
-          aria-label="Message"
-          placeholder="Write a message"
-          value={draft}
-          aria-invalid={tooLong || undefined}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-        <Button disabled={!canSend} onClick={send}>
-          {sending ? <Spinner className="size-4" /> : null}
-          Send
-        </Button>
-      </div>
+    <div className="flex flex-col gap-1 px-4 pt-1 pb-4">
+      <ComposerSurface.Shell>
+        <ComposerSurface.Host>
+          <ComposerSurface.Main>
+            <div className="flex items-end gap-2 rounded-2xl px-3 py-2.5">
+              <textarea
+                aria-label="Message"
+                placeholder="Write a message"
+                rows={1}
+                value={draft}
+                aria-invalid={tooLong || undefined}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={handleKeyDown}
+                className="max-h-48 min-h-6 min-w-0 flex-1 resize-none bg-transparent text-sm leading-6 [field-sizing:content] outline-none placeholder:text-placeholder"
+              />
+              <button
+                type="button"
+                aria-label={sending ? "Sending" : "Send message"}
+                disabled={!canSend}
+                onClick={send}
+                className="relative isolate flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:shadow-message-action/24 enabled:inset-shadow-control-highlight hover:bg-message-action-hover enabled:hover:scale-105 active:inset-shadow-control-pressed active:shadow-none disabled:pointer-events-none disabled:bg-foreground/12 disabled:text-muted-foreground disabled:shadow-none [&_svg]:pointer-events-none"
+              >
+                {sending ? (
+                  <Spinner size="sm" aria-hidden="true" />
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M8 3L8 13M8 3L4 7M8 3L12 7"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </ComposerSurface.Main>
+        </ComposerSurface.Host>
+      </ComposerSurface.Shell>
       {showsMessageCounter(draft.length, TEAM_MESSAGE_MAX_LENGTH) ? (
         <span
           className={cn(
@@ -112,11 +219,13 @@ function MessageList({
   conversationId,
   conversation,
   thread,
+  self,
 }: {
   readonly scope: MessagesScope;
   readonly conversationId: string;
   readonly conversation: TeamConversation;
   readonly thread: ThreadState;
+  readonly self: { readonly id: string; readonly name: string; readonly avatarUrl: string | null };
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -145,7 +254,7 @@ function MessageList({
   return (
     <div
       ref={scrollRef}
-      className="scrollbar-gutter-both flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3"
+      className="scrollbar-gutter-both flex min-h-0 flex-1 flex-col overflow-y-auto py-3"
       onScroll={(event) => {
         const element = event.currentTarget;
         anchor.current.nearBottom =
@@ -175,58 +284,63 @@ function MessageList({
         </p>
       ) : null}
       {groups.map((group) => (
-        <section
-          key={group.key}
-          aria-label={dayLabel(group.startedAt)}
-          className="flex flex-col gap-2"
-        >
-          <h2 className="self-center text-xs font-medium text-muted-foreground">
-            {dayLabel(group.startedAt)}
+        <section key={group.key} aria-label={dayLabel(group.startedAt)} className="flex flex-col">
+          <h2 className="relative my-3 flex items-center px-4 text-xs font-medium text-foreground">
+            <span className="h-px flex-1 bg-border" aria-hidden="true" />
+            <span className="mx-3 rounded-full border border-border px-3 py-0.5">
+              {dayLabel(group.startedAt)}
+            </span>
+            <span className="h-px flex-1 bg-border" aria-hidden="true" />
           </h2>
-          {group.messages.map((message) => (
-            <Bubble
+          {group.messages.map((message, index) => (
+            <MessageRow
               key={message.id}
-              own={!isIncomingMessage(message, conversation)}
+              author={message.senderId === self.id ? self : conversation.peer}
+              startsRun={startsMessageRun(group.messages[index - 1], message)}
               time={formatShortTimestamp(message.createdAt, timestampFormat)}
             >
               {message.body}
-            </Bubble>
+            </MessageRow>
           ))}
         </section>
       ))}
-      {thread.pending.map((entry) => (
-        <div key={entry.localId} className="flex flex-col items-end gap-0.5">
-          <p
-            className={cn(
-              "max-w-[min(36rem,85%)] rounded-2xl bg-primary px-3 py-1.5 text-sm wrap-anywhere whitespace-pre-wrap text-primary-foreground",
-              entry.status === "sending" ? "opacity-64" : "opacity-100",
-            )}
+      {thread.pending.map((entry, index) => {
+        const previous = index === 0 ? thread.messages.at(-1) : undefined;
+        return (
+          <MessageRow
+            key={entry.localId}
+            author={self}
+            startsRun={index === 0 ? previous?.senderId !== self.id : false}
+            time=""
+            dimmed={entry.status === "sending"}
+            footer={
+              entry.status === "sending" ? (
+                <span className="text-3xs text-muted-foreground">Sending…</span>
+              ) : (
+                <span role="alert" className="flex items-center gap-2 text-xs">
+                  <span className="text-destructive-foreground">{entry.error ?? "Not sent."}</span>
+                  <Button
+                    size="micro"
+                    variant="ghost"
+                    onClick={() => void retryMessage(scope, conversationId, entry.localId)}
+                  >
+                    Retry
+                  </Button>
+                  <Button
+                    size="micro"
+                    variant="ghost-muted"
+                    onClick={() => discardMessage(scope, conversationId, entry.localId)}
+                  >
+                    Discard
+                  </Button>
+                </span>
+              )
+            }
           >
             {entry.body}
-          </p>
-          {entry.status === "sending" ? (
-            <span className="px-1 text-3xs text-muted-foreground">Sending…</span>
-          ) : (
-            <span role="alert" className="flex items-center gap-2 px-1 text-xs">
-              <span className="text-destructive-foreground">{entry.error ?? "Not sent."}</span>
-              <Button
-                size="micro"
-                variant="ghost"
-                onClick={() => void retryMessage(scope, conversationId, entry.localId)}
-              >
-                Retry
-              </Button>
-              <Button
-                size="micro"
-                variant="ghost-muted"
-                onClick={() => discardMessage(scope, conversationId, entry.localId)}
-              >
-                Discard
-              </Button>
-            </span>
-          )}
-        </div>
-      ))}
+          </MessageRow>
+        );
+      })}
     </div>
   );
 }
@@ -244,6 +358,7 @@ export function ConversationView({
   readonly thread: ThreadState | undefined;
   readonly listReady: boolean;
 }) {
+  const account = useTeamAccount();
   if (conversation === undefined) {
     const failed = thread?.status === "failed";
     return listReady || failed ? (
@@ -263,6 +378,8 @@ export function ConversationView({
     );
   }
   const { peer } = conversation;
+  const me = account.session.status === "ready" ? account.session.me.user : null;
+  const self = { id: me?.id ?? "", name: me?.name ?? "You", avatarUrl: me?.avatarUrl ?? null };
   return (
     <>
       <div className="flex items-center gap-3 border-b border-border px-4 py-2">
@@ -302,6 +419,7 @@ export function ConversationView({
             conversationId={conversationId}
             conversation={conversation}
             thread={thread}
+            self={self}
           />
           <Composer
             scope={scope}

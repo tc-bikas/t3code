@@ -10,6 +10,8 @@ import {
   openConversationId,
   previewText,
   reconnectDelayMs,
+  splitMessageText,
+  startsMessageRun,
   totalUnread,
   upsertConversation,
 } from "./messages.logic";
@@ -102,5 +104,42 @@ describe("helpers", () => {
   it("reads the open conversation from the path", () => {
     expect(openConversationId("/messages/42")).toBe("42");
     expect(openConversationId("/messages")).toBeNull();
+  });
+});
+
+describe("splitMessageText", () => {
+  it("finds links and pull requests, and leaves sentence punctuation out of them", () => {
+    expect(
+      splitMessageText(
+        "Review https://github.com/acme/app/pull/42/files, then see (https://example.com/a_(b)) or https://example.com.",
+      ),
+    ).toEqual([
+      { kind: "text", text: "Review " },
+      {
+        kind: "pull-request",
+        url: "https://github.com/acme/app/pull/42/files",
+        repository: "acme/app",
+        number: 42,
+      },
+      { kind: "text", text: ", then see (" },
+      { kind: "link", url: "https://example.com/a_(b)" },
+      { kind: "text", text: ") or " },
+      { kind: "link", url: "https://example.com" },
+      { kind: "text", text: "." },
+    ]);
+    expect(splitMessageText("no links here")).toEqual([{ kind: "text", text: "no links here" }]);
+    expect(splitMessageText("https://github.com/acme/app/issues/3")).toEqual([
+      { kind: "link", url: "https://github.com/acme/app/issues/3" },
+    ]);
+  });
+});
+
+describe("startsMessageRun", () => {
+  it("groups one sender's messages until a five minute pause", () => {
+    const at = (time: string) => ({ senderId: "a", createdAt: `2030-01-01T${time}Z` });
+    expect(startsMessageRun(undefined, at("10:00:00"))).toBe(true);
+    expect(startsMessageRun(at("10:00:00"), at("10:04:59"))).toBe(false);
+    expect(startsMessageRun(at("10:00:00"), at("10:05:01"))).toBe(true);
+    expect(startsMessageRun(at("10:00:00"), { ...at("10:00:10"), senderId: "b" })).toBe(true);
   });
 });

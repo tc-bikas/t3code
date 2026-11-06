@@ -148,3 +148,70 @@ export function openConversationId(pathname: string): string | null {
   const match = /^\/messages\/([^/]+)\/?$/.exec(pathname);
   return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
 }
+
+export type MessageSegment =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "link"; readonly url: string }
+  | {
+      readonly kind: "pull-request";
+      readonly url: string;
+      readonly repository: string;
+      readonly number: number;
+    };
+
+const URL_PATTERN = /https?:\/\/[^\s<>"]+/g;
+const TRAILING_PUNCTUATION = /[.,;:!?'"\]}]+$/;
+const GITHUB_PULL_PATH = /^\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:\/|$)/;
+
+const count = (text: string, char: string) => text.split(char).length - 1;
+
+/** A URL at the end of a sentence loses its punctuation; a `)` stays only when the URL opened one. */
+function trimUrl(raw: string): string {
+  let url = raw.replace(TRAILING_PUNCTUATION, "");
+  while (url.endsWith(")") && count(url, ")") > count(url, "(")) {
+    url = url.slice(0, -1).replace(TRAILING_PUNCTUATION, "");
+  }
+  return url;
+}
+
+/** Splits a message into plain text, links, and GitHub pull request links. */
+export function splitMessageText(body: string): ReadonlyArray<MessageSegment> {
+  const segments: MessageSegment[] = [];
+  let cursor = 0;
+  const pushText = (end: number) => {
+    if (end > cursor) segments.push({ kind: "text", text: body.slice(cursor, end) });
+  };
+  for (const match of body.matchAll(URL_PATTERN)) {
+    const url = trimUrl(match[0]);
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      continue;
+    }
+    pushText(match.index);
+    cursor = match.index + url.length;
+    const pull =
+      parsed.hostname === "github.com" || parsed.hostname === "www.github.com"
+        ? GITHUB_PULL_PATH.exec(parsed.pathname)
+        : null;
+    segments.push(
+      pull?.[1] && pull[2]
+        ? { kind: "pull-request", url, repository: pull[1], number: Number(pull[2]) }
+        : { kind: "link", url },
+    );
+  }
+  pushText(body.length);
+  return segments;
+}
+
+const RUN_GAP_MS = 5 * 60_000;
+
+/** A message opens a new run (name and avatar shown) after another sender or a pause of five minutes. */
+export function startsMessageRun(
+  previous: { readonly senderId: string; readonly createdAt: string } | undefined,
+  message: { readonly senderId: string; readonly createdAt: string },
+): boolean {
+  if (previous === undefined || previous.senderId !== message.senderId) return true;
+  return Date.parse(message.createdAt) - Date.parse(previous.createdAt) > RUN_GAP_MS;
+}
