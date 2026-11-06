@@ -15,6 +15,14 @@ export interface TeamContext {
   readonly publicUrl: string;
   readonly allowedEmailDomains: ReadonlyArray<string>;
   readonly events: EventBus;
+  /** Runs after a message is stored; dev-only demo teammates use it to reply. */
+  readonly afterMessage?:
+    | ((info: {
+        readonly conversationId: string;
+        readonly senderId: string;
+        readonly recipientId: string;
+      }) => void)
+    | undefined;
   /** Repeats `fn` every `ms` until the returned function is called. Injected so tests can tick by hand. */
   readonly every: (ms: number, fn: () => void) => () => void;
 }

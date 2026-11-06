@@ -29,16 +29,17 @@ It listens on `http://127.0.0.1:3790`. With no `DATABASE_URL` it uses embedded P
 
 ## Environment
 
-| Variable                     | Default                 | Purpose                                                                                                                         |
-| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `TEAM_GITHUB_CLIENT_ID`      | unset                   | OAuth App client id. Both GitHub variables are needed for sign-in.                                                              |
-| `TEAM_GITHUB_CLIENT_SECRET`  | unset                   | OAuth App client secret.                                                                                                        |
-| `TEAM_PUBLIC_URL`            | `http://localhost:3790` | Public origin; the GitHub callback is `${TEAM_PUBLIC_URL}/auth/github/callback`.                                                |
-| `DATABASE_URL`               | unset                   | Postgres connection string. When set, `pg` is used instead of PGlite.                                                           |
-| `TEAM_PORT`                  | `3790`                  | Port to listen on. Railway sets `PORT`; map it with `TEAM_PORT=${{PORT}}`.                                                      |
-| `TEAM_HOST`                  | `127.0.0.1`             | Bind address. Local only by default; use `0.0.0.0` when deployed.                                                               |
-| `TEAM_ALLOWED_EMAIL_DOMAINS` | unset                   | Comma-separated email domains. When set, only people with a GitHub-verified email at one of them can sign in. Unset means open. |
-| `TEAM_DATA_DIR`              | `<cwd>/.t3-team/pgdata` | PGlite data directory (ignored when `DATABASE_URL` is set).                                                                     |
+| Variable                     | Default                 | Purpose                                                                                                                                                                               |
+| ---------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TEAM_GITHUB_CLIENT_ID`      | unset                   | OAuth App client id. Both GitHub variables are needed for sign-in.                                                                                                                    |
+| `TEAM_GITHUB_CLIENT_SECRET`  | unset                   | OAuth App client secret.                                                                                                                                                              |
+| `TEAM_PUBLIC_URL`            | `http://localhost:3790` | Public origin; the GitHub callback is `${TEAM_PUBLIC_URL}/auth/github/callback`.                                                                                                      |
+| `DATABASE_URL`               | unset                   | Postgres connection string. When set, `pg` is used instead of PGlite.                                                                                                                 |
+| `TEAM_PORT`                  | `3790`                  | Port to listen on. Railway sets `PORT`; map it with `TEAM_PORT=${{PORT}}`.                                                                                                            |
+| `TEAM_HOST`                  | `127.0.0.1`             | Bind address. Local only by default; use `0.0.0.0` when deployed.                                                                                                                     |
+| `TEAM_ALLOWED_EMAIL_DOMAINS` | unset                   | Comma-separated email domains. When set, only people with a GitHub-verified email at one of them can sign in. Unset means open.                                                       |
+| `TEAM_DEMO_PEOPLE`           | unset                   | `1` adds four fake teammates (`ada-demo`, `grace-demo`, `linus-demo`, `margaret-demo`) who answer messages, for trying DMs alone. Refused with `DATABASE_URL` or a non-loopback host. |
+| `TEAM_DATA_DIR`              | `<cwd>/.t3-team/pgdata` | PGlite data directory (ignored when `DATABASE_URL` is set).                                                                                                                           |
 
 Migrations run at startup. The service's only outbound calls are to `github.com` and `api.github.com`.
 

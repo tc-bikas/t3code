@@ -17,7 +17,10 @@ import type {
 import * as NodeCrypto from "node:crypto";
 import type * as NodeNet from "node:net";
 import { describe, expect, it } from "vite-plus/test";
+import { loadConfig } from "./config.ts";
+import type { TeamContext } from "./context.ts";
 import { openPglite } from "./db.ts";
+import { demoReplies, seedDemoPeople } from "./demoPeople.ts";
 import { createEventBus } from "./events.ts";
 import type { GithubClient, GithubEmail, GithubProfile } from "./github.ts";
 import { migrate } from "./migrations.ts";
@@ -97,6 +100,7 @@ async function createHarness(configured: boolean, allowedEmailDomains: ReadonlyA
     publicUrl: "http://team.test",
     allowedEmailDomains,
     events: createEventBus(),
+    afterMessage: undefined as TeamContext["afterMessage"],
     every: (_ms: number, fn: () => void) => {
       tickers.add(fn);
       return () => void tickers.delete(fn);
@@ -232,6 +236,7 @@ async function createHarness(configured: boolean, allowedEmailDomains: ReadonlyA
   };
 
   return {
+    ctx,
     db,
     fake,
     call,
@@ -890,6 +895,37 @@ describe("direct messages", () => {
     cat: await t.account("cat@x.test", "Cat Fox"),
   });
 
+  it("lets the demo teammates be found and answer a real person", async () => {
+    await withTeam(async (t) => {
+      const ann = await t.account("ann@x.test", "Ann Lee");
+      const demo = await seedDemoPeople(t.ctx);
+      const replies: Array<() => Promise<unknown>> = [];
+      t.ctx.afterMessage = demoReplies(t.ctx, demo, (fn) => void replies.push(fn));
+      const found = (
+        (await t.call("GET", "/v1/users/search?q=ada-demo", { token: ann.token }))
+          .json as TeamUserSearchResult
+      ).users;
+      expect(found.map((u) => u.githubLogin)).toEqual(["ada-demo"]);
+      const conversation = (
+        await t.call("POST", "/v1/conversations", {
+          token: ann.token,
+          body: { userId: found[0]?.id },
+        })
+      ).json as TeamConversation;
+      await t.call("POST", `/v1/conversations/${conversation.id}/messages`, {
+        token: ann.token,
+        body: { body: "hello" },
+      });
+      expect(replies).toHaveLength(1);
+      await replies[0]?.();
+      const history = (
+        await t.call("GET", `/v1/conversations/${conversation.id}/messages`, { token: ann.token })
+      ).json as TeamMessagesResult;
+      expect(history.messages.map((m) => m.senderId)).toEqual([ann.id, found[0]?.id]);
+      expect(replies).toHaveLength(1);
+    });
+  });
+
   it("searches by login or name, excluding the caller", async () => {
     await withTeam(async (t) => {
       const { ann, bob } = await people(t);
@@ -1096,6 +1132,16 @@ describe("direct messages", () => {
       expect(t.tickers.size).toBe(0);
       expect((await t.call("GET", "/v1/events")).status).toBe(401);
     });
+  });
+});
+
+describe("demo teammates config", () => {
+  it("only runs on the embedded database and a loopback host", () => {
+    expect(loadConfig({ TEAM_DEMO_PEOPLE: "1" }, "/tmp").demoPeople).toBe(true);
+    expect(() =>
+      loadConfig({ TEAM_DEMO_PEOPLE: "1", DATABASE_URL: "postgres://x" }, "/tmp"),
+    ).toThrow();
+    expect(() => loadConfig({ TEAM_DEMO_PEOPLE: "1", TEAM_HOST: "0.0.0.0" }, "/tmp")).toThrow();
   });
 });
 

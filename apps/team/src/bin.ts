@@ -1,6 +1,7 @@
 import { loadConfig } from "./config.ts";
 import { openPglite, openPostgres } from "./db.ts";
-import { realEvery } from "./context.ts";
+import { type TeamContext, realEvery } from "./context.ts";
+import { demoReplies, seedDemoPeople } from "./demoPeople.ts";
 import { createEventBus } from "./events.ts";
 import { createGithubClient } from "./github.ts";
 import { migrate } from "./migrations.ts";
@@ -13,7 +14,8 @@ const db = config.databaseUrl ? openPostgres(config.databaseUrl) : await openPgl
 await migrate(db);
 
 const now = () => Date.now();
-const server = createTeamServer({
+let afterMessage: TeamContext["afterMessage"];
+const ctx: TeamContext = {
   db,
   github: config.github && { ...config.github, client: createGithubClient() },
   limiter: createRateLimiter(now),
@@ -22,7 +24,10 @@ const server = createTeamServer({
   allowedEmailDomains: config.allowedEmailDomains,
   events: createEventBus(),
   every: realEvery,
-});
+  afterMessage: (info) => afterMessage?.(info),
+};
+if (config.demoPeople) afterMessage = demoReplies(ctx, await seedDemoPeople(ctx));
+const server = createTeamServer(ctx);
 
 server.listen(config.port, config.host, () => {
   const address = server.address();

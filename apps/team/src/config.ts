@@ -8,6 +8,8 @@ export interface TeamConfig {
   readonly publicUrl: string;
   /** Empty means open sign-in. */
   readonly allowedEmailDomains: ReadonlyArray<string>;
+  /** Local-only fake teammates for trying messages without a second account. */
+  readonly demoPeople: boolean;
   /** Present only when both the client id and the secret are set. */
   readonly github: { readonly clientId: string; readonly clientSecret: string } | undefined;
 }
@@ -19,9 +21,15 @@ export function loadConfig(env: NodeJS.ProcessEnv, cwd: string): TeamConfig {
   }
   const clientId = env.TEAM_GITHUB_CLIENT_ID;
   const clientSecret = env.TEAM_GITHUB_CLIENT_SECRET;
+  const demoPeople = env.TEAM_DEMO_PEOPLE === "1";
+  const host = env.TEAM_HOST || "127.0.0.1";
+  if (demoPeople && (env.DATABASE_URL || !["127.0.0.1", "localhost", "::1"].includes(host))) {
+    throw new Error("TEAM_DEMO_PEOPLE only runs on the embedded database and a loopback host.");
+  }
   return {
+    demoPeople,
     port,
-    host: env.TEAM_HOST || "127.0.0.1",
+    host,
     databaseUrl: env.DATABASE_URL || undefined,
     dataDir: env.TEAM_DATA_DIR || NodePath.join(cwd, ".t3-team", "pgdata"),
     publicUrl: (env.TEAM_PUBLIC_URL || "http://localhost:3790").replace(/\/+$/, ""),

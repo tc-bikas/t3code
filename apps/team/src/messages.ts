@@ -222,6 +222,7 @@ export async function sendMessage(
     const [conversation] = await conversationsFor(ctx.db, recipient, conversationId);
     if (conversation) ctx.events.publish(recipient, { type: "message", message, conversation });
   }
+  ctx.afterMessage?.({ conversationId, senderId: user.id, recipientId: peerId });
   return message;
 }
 
